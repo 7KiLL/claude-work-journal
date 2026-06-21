@@ -1,0 +1,17 @@
+{
+  "name": "claude-work-journal",
+  "interface": { "displayName": "Work Journal" },
+  "plugins": [
+    {
+      "name": "work-journal",
+      "description": "Per-project work journal via SessionStart/Stop hooks.",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/7KiLL/claude-work-journal.git",
+        "path": ".",
+        "ref": "main"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

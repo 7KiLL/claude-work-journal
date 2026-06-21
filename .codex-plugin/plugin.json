@@ -1,0 +1,15 @@
+{
+  "name": "work-journal",
+  "version": "0.6.0",
+  "description": "Per-project work journal. Recalls past task summaries at session start, distills each finished session into one dated markdown entry at Stop. Plain .md files under ~/.claude/work-journal.",
+  "author": { "name": "7KiLL", "url": "https://github.com/7KiLL" },
+  "repository": "https://github.com/7KiLL/claude-work-journal",
+  "license": "MIT",
+  "keywords": ["memory", "journal", "productivity", "hooks"],
+  "hooks": "./hooks/hooks.codex.json",
+  "interface": {
+    "displayName": "Work Journal",
+    "shortDescription": "Per-project memory across sessions",
+    "category": "Productivity"
+  }
+}

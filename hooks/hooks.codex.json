@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "startup|resume", "hooks": [ { "type": "command", "command": "bash \"${PLUGIN_ROOT}/hooks/recall.sh\"", "timeout": 10 } ] }
+    ],
+    "Stop": [
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "bash \"${PLUGIN_ROOT}/hooks/capture.sh\"", "timeout": 120 } ] }
+    ]
+  }
+}

@@ -48,11 +48,13 @@ case "$cmd" in
   doctor)
     echo "journal dir: $MEM"
     if [ -n "${WORK_JOURNAL_SUMMARIZER:-}" ]; then
-      echo "summarizer:  $WORK_JOURNAL_SUMMARIZER (custom)"
-      deps="jq git"
+      echo "summarizer:  $WORK_JOURNAL_SUMMARIZER (custom)"; deps="jq git"
+    elif command -v "$CLI" >/dev/null 2>&1; then
+      echo "summarizer:  $CLI -p --model $MODEL"; deps="jq git $CLI"
+    elif command -v codex >/dev/null 2>&1; then
+      echo "summarizer:  codex exec (claude not found)"; deps="jq git codex"
     else
-      echo "summarizer:  $CLI -p --model $MODEL"
-      deps="jq git $CLI"
+      echo "summarizer:  NONE — install claude/codex or set WORK_JOURNAL_SUMMARIZER"; deps="jq git $CLI"
     fi
     for b in $deps; do
       if command -v "$b" >/dev/null 2>&1; then echo "  dep ok:      $b"; else echo "  dep MISSING: $b"; fi

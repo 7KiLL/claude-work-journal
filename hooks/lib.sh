@@ -98,10 +98,16 @@ wj_recall_chain() {
 # model (e.g. `codex exec`) on a box without `claude`. WORK_JOURNAL_LOCK stops
 # the nested call from re-firing our own hooks.
 wj_summarize() {
+  local claude="${CLAUDE_BIN:-claude}" model="${WORK_JOURNAL_MODEL:-haiku}"
   if [ -n "${WORK_JOURNAL_SUMMARIZER:-}" ]; then
     WORK_JOURNAL_LOCK=1 bash -c "$WORK_JOURNAL_SUMMARIZER"
+  elif command -v "$claude" >/dev/null 2>&1; then
+    WORK_JOURNAL_LOCK=1 "$claude" -p --model "$model"
   else
-    WORK_JOURNAL_LOCK=1 "${CLAUDE_BIN:-claude}" -p --model "${WORK_JOURNAL_MODEL:-haiku}"
+    # ponytail: best-effort Codex fallback when claude is absent — lets the Codex
+    # plugin work with no config. If your build's `codex exec` doesn't read the
+    # prompt on stdin, set WORK_JOURNAL_SUMMARIZER. Failure is logged, never fatal.
+    WORK_JOURNAL_LOCK=1 codex exec
   fi
 }
 

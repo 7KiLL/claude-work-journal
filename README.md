@@ -18,24 +18,19 @@ Restart the session so the hooks load.
 
 ### Codex
 
-Codex mirrors Claude Code's hook schema, so the **same scripts** run there — no
-rewrite. There's no marketplace; wire the hooks into `~/.codex/config.toml`:
+The same repo installs natively in Codex, which shares Claude Code's plugin and
+hook schema:
 
 ```
-bash install-codex.sh install      # appends a guarded block; `uninstall` removes it
-bash install-codex.sh print        # just print the block to paste yourself
+codex plugin marketplace add 7KiLL/claude-work-journal
 ```
 
-This points Codex's `SessionStart` → `recall.sh` and `Stop` → `capture.sh`
-(Codex has no `SessionEnd`; `Stop` is the end-equivalent). If `claude` isn't on
-the box, set `WORK_JOURNAL_SUMMARIZER` to a stdin-reading command (e.g. `codex
-exec`) so capture can still summarize. Journals are shared across both tools —
-same `~/.claude/work-journal/` store, same `.work-journal` markers.
-
-Caveat: if your Codex build fires `Stop` per-turn rather than once at the end,
-capture writes the entry on the first substantive turn (idempotent by session
-id) — an early checkpoint, not the final state. Tell me and I'll switch capture
-to refresh-on-each-Stop.
+Then open `/plugins` in Codex and install **Work Journal**. It wires
+`SessionStart` → recall and `Stop` → capture (Codex's session-end event) and
+shares the same `~/.claude/work-journal/` store and `.work-journal` markers as
+Claude Code, so journals carry across both tools. Capture summarizes with
+`claude` when present, otherwise Codex; set `WORK_JOURNAL_SUMMARIZER` to use a
+specific command.
 
 ## How it works
 
@@ -132,7 +127,7 @@ Capture is **idempotent per session**: each entry's frontmatter carries its `ses
 - A SessionEnd fired by compaction is skipped, so a long session isn't journaled mid-task — only its real end is.
 - Recursion is prevented by a `WORK_JOURNAL_LOCK` env guard, since the capture step spawns its own `claude` session.
 - Only the last `WORK_JOURNAL_MAX_BYTES` of the transcript is summarized — bounds cost/latency on very long sessions.
-- Requires `jq`, `git`, and the `claude` CLI; if `jq` or `claude` is missing the hooks no-op and log it instead of erroring.
+- Requires `jq` and a summarizer (`claude`, `codex`, or `WORK_JOURNAL_SUMMARIZER`); if `jq` or every summarizer is missing, the hooks no-op and log it instead of erroring.
 
 ## Uninstall
 

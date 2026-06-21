@@ -96,9 +96,10 @@ fi
 
 # ============ dispatcher (fast): parse payload, spawn worker, return now ============
 command -v jq    >/dev/null 2>&1 || { echo "[$(date -Is)] work-journal: jq not installed — disabled" >> "$MEM/.errors.log"; exit 0; }
-# A custom summarizer (e.g. Codex) means `claude` need not be present.
-if [ -z "${WORK_JOURNAL_SUMMARIZER:-}" ]; then
-  command -v "$CLI" >/dev/null 2>&1 || { echo "[$(date -Is)] work-journal: '$CLI' not found — set CLAUDE_BIN or WORK_JOURNAL_SUMMARIZER" >> "$MEM/.errors.log"; exit 0; }
+# Need *a* summarizer: a custom one, claude, or codex (wj_summarize tries them
+# in that order). Only bail if none exist.
+if [ -z "${WORK_JOURNAL_SUMMARIZER:-}" ] && ! command -v "$CLI" >/dev/null 2>&1 && ! command -v codex >/dev/null 2>&1; then
+  echo "[$(date -Is)] work-journal: no summarizer found — install claude/codex or set WORK_JOURNAL_SUMMARIZER" >> "$MEM/.errors.log"; exit 0
 fi
 
 input="$(cat)"   # hook payload on stdin
