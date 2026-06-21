@@ -39,7 +39,7 @@ Capture is **idempotent per session**: each entry's frontmatter carries its `ses
 
 ## Commands
 
-`/journal <subcommand>` (or run `bash plugins/work-journal/journal.sh` directly):
+`/journal <subcommand>` (or run `bash journal.sh` from the plugin directly):
 
 | Command | Does |
 |---------|------|

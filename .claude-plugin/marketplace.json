@@ -1,11 +1,17 @@
 {
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "claude-work-journal",
-  "owner": { "name": "7KiLL" },
+  "description": "Per-project work journal for Claude Code — recalls past task summaries at session start, writes one at session end.",
+  "owner": {
+    "name": "7KiLL",
+    "url": "https://github.com/7KiLL"
+  },
   "plugins": [
     {
       "name": "work-journal",
-      "source": "./plugins/work-journal",
-      "description": "Per-project work journal via SessionStart/SessionEnd hooks."
+      "source": "./",
+      "description": "Per-project work journal via SessionStart/SessionEnd hooks.",
+      "category": "productivity"
     }
   ]
 }

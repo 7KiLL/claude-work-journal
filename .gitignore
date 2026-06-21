@@ -1,5 +1,0 @@
-# Your global ~/.config/git/ignore has a '**/*-journal' pattern that matches
-# this plugin's directory by name. Re-include it explicitly. (Nothing here uses
-# SQLite; that pattern just happens to share the word "journal".)
-!plugins/work-journal/
-!plugins/work-journal/**
