@@ -1,0 +1,4 @@
+# Your global ~/.config/git/ignore has '**/*-journal' (for SQLite journals),
+# which would swallow this plugin's directory. Re-include it explicitly.
+!plugins/work-journal/
+!plugins/work-journal/**
