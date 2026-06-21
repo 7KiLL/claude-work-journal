@@ -37,6 +37,17 @@ Hooks are fail-safe — they never block or crash a session. If the detached cap
 
 Capture is **idempotent per session**: each entry's frontmatter carries its `session:` id, and a session that's already been captured is skipped — so a hook firing twice (e.g. compact then exit) won't duplicate. recall also warns once an index grows past ~150 entries.
 
+## Commands
+
+`/journal <subcommand>` (or run `bash plugins/work-journal/journal.sh` directly):
+
+| Command | Does |
+|---------|------|
+| `doctor` | dependency check, project count, recent errors |
+| `ls` | list projects and entry counts |
+| `trim <project> [N]` | keep the newest N entries (default 30); summarize the rest into `archive.md` |
+| `mv <from> <to>` | rename a project's journal, or merge it into an existing one |
+
 ## Requirements
 
 `jq`, `git`, and the `claude` CLI on PATH (all standard on a dev machine).
@@ -52,7 +63,7 @@ Capture is **idempotent per session**: each entry's frontmatter carries its `ses
 ## Notes
 
 - Capture is detached (`nohup`), so session exit is instant; the summary lands a few seconds later.
-- Entries are append-only, one per session — a journal is a log. (Renaming a project orphans its old folder under the old name; a `journal mv` helper for that is planned.)
+- Entries are append-only, one per session — a journal is a log. Renaming a project orphans its old folder; use `/journal mv <old> <new>` to rename or merge.
 - Index/router writes are guarded with `flock` so parallel sessions don't clobber each other.
 - Recursion is prevented by a `CLAUDE_WORKJOURNAL_LOCK` env guard, since the capture step spawns its own `claude` session.
 - Requires `jq`, `git`, and the `claude` CLI; if `jq` or `claude` is missing the hooks no-op and log it instead of erroring.
