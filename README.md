@@ -5,7 +5,7 @@ A Claude Code plugin that keeps a **per-project work journal** in plain markdown
 - **Session start** → injects the current project's past task summaries into context, so Claude knows what you've already done here.
 - **Session end** → distills the finished session into one dated `.md` entry (or skips it if nothing durable happened).
 
-No database. Just `.md` files under `~/.claude/memory/`, grep-able and git-able.
+No database. Just `.md` files under `~/.claude/work-journal/`, grep-able and git-able.
 
 ## Install
 
@@ -21,7 +21,7 @@ Restart the session so the hooks load.
 The current working directory selects the project (git root, else the folder name) — that's the whole "router". Layout:
 
 ```
-~/.claude/memory/
+~/.claude/work-journal/
   ROUTER.md                       # auto-rebuilt map of all projects
   <project>/
     INDEX.md                      # one line per entry, newest first  ← injected at session start
@@ -33,7 +33,7 @@ The current working directory selects the project (git root, else the folder nam
 
 ## Failure handling
 
-Hooks are fail-safe — they never block or crash a session. If the detached capture fails (model error, missing `jq`/`claude`, etc.) it appends a line to `~/.claude/memory/.errors.log` instead of erroring loudly. At the **next** session start, recall surfaces a one-line "work-journal logged N issue(s)" notice and rotates the log, so you find out without ever being interrupted mid-work.
+Hooks are fail-safe — they never block or crash a session. If the detached capture fails (model error, missing `jq`/`claude`, etc.) it appends a line to `~/.claude/work-journal/.errors.log` instead of erroring loudly. At the **next** session start, recall surfaces a one-line "work-journal logged N issue(s)" notice and rotates the log, so you find out without ever being interrupted mid-work.
 
 Capture is **idempotent per session**: each entry's frontmatter carries its `session:` id, and a session that's already been captured is skipped — so a hook firing twice (e.g. compact then exit) won't duplicate. recall also warns once an index grows past ~150 entries.
 
@@ -56,8 +56,9 @@ Capture is **idempotent per session**: each entry's frontmatter carries its `ses
 
 | Var | Default | Purpose |
 |-----|---------|---------|
-| `CLAUDE_MEMORY_DIR` | `~/.claude/memory` | where journals live |
-| `CLAUDE_MEMORY_MODEL` | `haiku` | model used to summarize sessions |
+| `WORK_JOURNAL_DIR` | `~/.claude/work-journal` | where journals live |
+| `WORK_JOURNAL_MODEL` | `haiku` | model used to summarize sessions |
+| `WORK_JOURNAL_MAX_BYTES` | `200000` | max transcript bytes fed to the model (cost guard) |
 | `CLAUDE_BIN` | `claude` | path to the Claude CLI (set if not on `PATH`) |
 
 ## Notes
@@ -67,7 +68,8 @@ Capture is **idempotent per session**: each entry's frontmatter carries its `ses
 - Index/router writes are guarded with `flock` so parallel sessions don't clobber each other.
 - Two repos with the same folder name get distinct journals (`api`, then `api-2`). Identity is the git remote (else the repo path), recorded in each folder's `.source`; the suffix only appears on a real collision.
 - A SessionEnd fired by compaction is skipped, so a long session isn't journaled mid-task — only its real end is.
-- Recursion is prevented by a `CLAUDE_WORKJOURNAL_LOCK` env guard, since the capture step spawns its own `claude` session.
+- Recursion is prevented by a `WORK_JOURNAL_LOCK` env guard, since the capture step spawns its own `claude` session.
+- Only the last `WORK_JOURNAL_MAX_BYTES` of the transcript is summarized — bounds cost/latency on very long sessions.
 - Requires `jq`, `git`, and the `claude` CLI; if `jq` or `claude` is missing the hooks no-op and log it instead of erroring.
 
 ## Uninstall
@@ -76,6 +78,6 @@ Capture is **idempotent per session**: each entry's frontmatter carries its `ses
 /plugin uninstall work-journal@claude-work-journal
 ```
 
-Your journals under `~/.claude/memory/` are left untouched.
+Your journals under `~/.claude/work-journal/` are left untouched.
 
 MIT

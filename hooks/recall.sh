@@ -5,9 +5,9 @@ set -uo pipefail
 
 # Guard: capture runs `claude -p`, which re-fires this hook. The lock env var
 # (set by capture.sh on that nested call) makes this a no-op inside it.
-[ -n "${CLAUDE_WORKJOURNAL_LOCK:-}" ] && exit 0
+[ -n "${WORK_JOURNAL_LOCK:-}" ] && exit 0
 
-MEM="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
+MEM="${WORK_JOURNAL_DIR:-$HOME/.claude/work-journal}"
 command -v jq >/dev/null 2>&1 || exit 0   # can't inject without jq (capture logs this)
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/lib.sh"
 

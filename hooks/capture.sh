@@ -7,11 +7,12 @@ set -uo pipefail
 
 # Guard: the worker runs `claude -p`, itself a session that re-fires the hooks.
 # The lock env var makes both hooks no-op inside that nested call → no recursion.
-[ -n "${CLAUDE_WORKJOURNAL_LOCK:-}" ] && exit 0
+[ -n "${WORK_JOURNAL_LOCK:-}" ] && exit 0
 
-MEM="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
-MODEL="${CLAUDE_MEMORY_MODEL:-haiku}"
+MEM="${WORK_JOURNAL_DIR:-$HOME/.claude/work-journal}"
+MODEL="${WORK_JOURNAL_MODEL:-haiku}"
 CLI="${CLAUDE_BIN:-claude}"
+CAP="${WORK_JOURNAL_MAX_BYTES:-200000}"   # cap transcript fed to the model (cost guard)
 mkdir -p "$MEM" 2>/dev/null || true
 self="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/$(basename "${BASH_SOURCE[0]}")"
 source "$(dirname "$self")/lib.sh"
@@ -55,9 +56,10 @@ EOF
 )
 
   # Run from a neutral dir so the summarizer doesn't load the project's CLAUDE.md.
+  # Feed only the last $CAP bytes — a journal cares about how the session ended.
   out="$( cd "${TMPDIR:-/tmp}"
-          { printf '%s\n\n=== TRANSCRIPT ===\n' "$PROMPT"; cat "$transcript"; } \
-            | CLAUDE_WORKJOURNAL_LOCK=1 "$CLI" -p --model "$MODEL" 2>/dev/null )" || true
+          { printf '%s\n\n=== TRANSCRIPT (tail) ===\n' "$PROMPT"; tail -c "$CAP" "$transcript"; } \
+            | WORK_JOURNAL_LOCK=1 "$CLI" -p --model "$MODEL" 2>/dev/null )" || true
   [ -n "$out" ] || { echo "[$(date -Is)] work-journal: summarizer failed/empty for $slug"; exit 0; }
 
   first="${out%%$'\n'*}"
@@ -87,14 +89,7 @@ EOF
     tmp="$(mktemp)"
     { head -n 2 "$idx"; printf -- '- [%s %s](%s) — %s\n' "$day" "$taskslug" "$file" "$hook"; tail -n +3 "$idx"; } > "$tmp"
     mv "$tmp" "$idx"
-    { printf '# Work journal — projects\n\n'
-      for p in "$MEM"/*/INDEX.md; do
-        [ -e "$p" ] || continue
-        d="$(basename "$(dirname "$p")")"
-        n="$(grep -c '^- ' "$p" 2>/dev/null || true)"; n="${n:-0}"
-        printf -- '- %s (%s entries) — %s/INDEX.md\n' "$d" "$n" "$d"
-      done
-    } > "$MEM/ROUTER.md"
+    wj_rebuild_router "$MEM"
   } 9>"$MEM/.lock"
   exit 0
 fi
