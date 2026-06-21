@@ -59,10 +59,12 @@ Capture is **idempotent per session**: each entry's frontmatter carries its `ses
 | `WORK_JOURNAL_DIR` | `~/.claude/work-journal` | where journals live |
 | `WORK_JOURNAL_MODEL` | `haiku` | model used to summarize sessions |
 | `WORK_JOURNAL_MAX_BYTES` | `200000` | max transcript bytes fed to the model (cost guard) |
+| `WORK_JOURNAL_QUIET` | unset | set to `1` to hide the session-start banner line |
 | `CLAUDE_BIN` | `claude` | path to the Claude CLI (set if not on `PATH`) |
 
 ## Notes
 
+- At session start you get a visible `📓 work journal · <project> · N entries` line (via the hook's `systemMessage`). The built-in welcome banner itself can't be modified — it renders before any hook runs. Silence the line with `WORK_JOURNAL_QUIET=1`.
 - Capture is detached (`nohup`), so session exit is instant; the summary lands a few seconds later.
 - Entries are append-only, one per session — a journal is a log. Renaming a project orphans its old folder; use `/journal mv <old> <new>` to rename or merge.
 - Index/router writes are guarded with `flock` so parallel sessions don't clobber each other.

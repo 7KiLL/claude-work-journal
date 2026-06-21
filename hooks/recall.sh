@@ -27,16 +27,31 @@ if [ -s "$MEM/.errors.log" ]; then
 fi
 
 body=""
+count=0
 if [ -f "$idx" ]; then
-  lines="$(grep -c '^- ' "$idx" 2>/dev/null || echo 0)"
+  count="$(grep -c '^- \[' "$idx" 2>/dev/null || echo 0)"
   warn=""
   # ponytail: flat 150-entry threshold; raise/lower if it nags too early/late.
-  [ "${lines:-0}" -gt 150 ] && warn=" (this index has $lines entries — consider trimming it)"
+  [ "${count:-0}" -gt 150 ] && warn=" (this index has $count entries — consider trimming it)"
   body="## Work journal — ${slug}${warn}"$'\n'"Prior task entries; open a file when one is relevant to what we are about to do:"$'\n\n'"$(cat "$idx")"
 fi
 
 ctx="${notice}${body}"
-[ -n "$ctx" ] || exit 0
 
-# Plain stdout is NOT injected; SessionStart context must be this JSON shape.
-jq -n --arg c "$ctx" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}'
+# Visible one-line banner shown to the user. Silence with WORK_JOURNAL_QUIET=1.
+msg=""
+if [ -z "${WORK_JOURNAL_QUIET:-}" ]; then
+  if [ "${count:-0}" -gt 0 ]; then
+    word="entries"; [ "$count" = 1 ] && word="entry"
+    msg="📓 work journal · ${slug} · ${count} ${word}"
+  else
+    msg="📓 work journal · ${slug} · new project"
+  fi
+fi
+
+[ -n "$ctx$msg" ] || exit 0
+
+# systemMessage is shown to the USER; additionalContext is injected into context.
+jq -n --arg m "$msg" --arg c "$ctx" '
+  (if $m == "" then {} else {systemMessage: $m} end)
+  + (if $c == "" then {} else {hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}} end)'
