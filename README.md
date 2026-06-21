@@ -31,6 +31,35 @@ The current working directory selects the project (git root, else the folder nam
 - `SessionStart` (`recall.sh`) reads `<project>/INDEX.md` and feeds it to Claude as `additionalContext`. New project → silent.
 - `SessionEnd` (`capture.sh`) returns instantly and runs the work **detached**, so it never blocks or hangs your exit. The detached worker pipes the transcript to a cheap headless `claude -p`, which replies `SKIP` or a single entry; the script writes the file, prepends the index line, and rebuilds `ROUTER.md`.
 
+## Linking projects (`.work-journal`)
+
+By default each git repo is its own journal. To connect several — a directory of
+microservices, a backend that reads a frontend's journal — drop a `.work-journal`
+marker file. It turns a plain directory into a journal node and recall **inherits
+upward**.
+
+```
+# ~/RiderProjects/.work-journal  — a folder-of-repos, not itself a repo
+slug: rider           # optional: name the journal (default: the dir name)
+root: true            # optional: stop the upward walk here (don't ascend past it)
+loads: fe, projectC   # optional: also load these journals (by slug, one hop)
+```
+
+What recall loads at session start:
+
+- **self** — the project you're in (git root, as before). Writes always go here.
+- **ancestors** — every `.work-journal` dir above you, walking up until `root: true`
+  or `/`. So opening Claude in `~/RiderProjects/projectA` loads `projectA` **+**
+  the `rider` parent. Opening in `~/RiderProjects` loads only `rider` — a parent
+  never loads its children.
+- **`loads:`** — any other journals by slug, one hop (no transitive). Storage is
+  flat by slug, so a load reaches **any** project regardless of where its repo
+  lives on disk — `~/RiderProjects` can `loads: fe` from `~/PhpstormProjects`.
+
+Empty marker (`touch .work-journal`) is valid — just names a node after its dir.
+Markers are plain `key: value`; an empty/missing field falls back to the default.
+Ask Claude to create or edit one for you; there's no schema to learn.
+
 ## Failure handling
 
 Hooks are fail-safe — they never block or crash a session. If the detached capture fails (model error, missing `jq`/`claude`, etc.) it appends a line to `~/.claude/work-journal/.errors.log` instead of erroring loudly. At the **next** session start, recall surfaces a one-line "work-journal logged N issue(s)" notice and rotates the log, so you find out without ever being interrupted mid-work.
@@ -64,7 +93,7 @@ Capture is **idempotent per session**: each entry's frontmatter carries its `ses
 
 ## Notes
 
-- At session start you get a visible `📓 work journal · <project> · N entries` line (via the hook's `systemMessage`). The built-in welcome banner itself can't be modified — it renders before any hook runs. Silence the line with `WORK_JOURNAL_QUIET=1`.
+- At session start you get a visible `📓 work journal · <project> · N entries` line (via the hook's `systemMessage`); a `(+K linked)` suffix shows when ancestor/`loads:` journals were pulled in. The built-in welcome banner itself can't be modified — it renders before any hook runs. Silence the line with `WORK_JOURNAL_QUIET=1`.
 - Capture is detached (`nohup`), so session exit is instant; the summary lands a few seconds later.
 - Entries are append-only, one per session — a journal is a log. Renaming a project orphans its old folder; use `/journal mv <old> <new>` to rename or merge.
 - Index/router writes are guarded with `flock` so parallel sessions don't clobber each other.

@@ -9,12 +9,29 @@ wj_source_id() {
   [ -n "$url" ] && printf '%s' "$url" || printf '%s' "$root"
 }
 
+# A .work-journal marker turns a plain directory into a journal node and can
+# declare a few optional `key: value` lines (slug, loads, root). Read one field
+# from $1/.work-journal; empty if absent. Trailing `# comment` and surrounding
+# whitespace are stripped.
+wj_marker_field() {
+  local f="$1/.work-journal" key="$2" line val
+  [ -f "$f" ] || return 0
+  line="$(grep -m1 -E "^[[:space:]]*$key[[:space:]]*:" "$f" 2>/dev/null)" || return 0
+  val="${line#*:}"; val="${val%%#*}"
+  val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
+  printf '%s' "$val"
+}
+
 # Echo the journal slug for repo root $1 under journal dir $2. Read-only; never
 # creates anything. Pretty name by default; suffixes -2/-3… only on a real
 # collision (a *different* repo that already owns the base name).
 wj_resolve_slug() {
   local root="$1" mem="$2"
-  local base id d i
+  local base id d i s
+  # A marker's explicit `slug:` wins outright — the user owns that name, so no
+  # collision suffix and no .source dance.
+  s="$(wj_marker_field "$root" slug)"
+  [ -n "$s" ] && { printf '%s' "$s"; return 0; }
   base="$(basename "$root")"
   id="$(wj_source_id "$root")"
   # 1) reuse a folder that already records this exact id
@@ -31,6 +48,48 @@ wj_resolve_slug() {
   i=2
   while [ -d "$mem/$base-$i" ]; do i=$((i+1)); done
   printf '%s' "$base-$i"
+}
+
+# Emit `<tag>\t<slug>` for each `loads:` entry of the marker in $1, skipping
+# slugs already in the seen-set $4. Threads the updated set out via $_WJ_SEEN
+# (bash can't return a string and print lines at once).
+_wj_loads() {
+  local dir="$1" tag="$3" loads tok
+  _WJ_SEEN="$4"
+  loads="$(wj_marker_field "$dir" loads)"
+  [ -n "$loads" ] || return 0
+  for tok in ${loads//,/ }; do
+    case "$_WJ_SEEN" in *"|$tok|"*) continue ;; esac
+    printf '%s\t%s\n' "$tag" "$tok"
+    _WJ_SEEN="$_WJ_SEEN$tok|"
+  done
+}
+
+# Ordered, deduped set of journal slugs to load for a session rooted at $1,
+# under journal dir $2. Prints `<tag>\t<slug>` lines: self, then ancestors
+# (walking up, nearest first, stopping at a `root: true` marker or /), then
+# one-hop `loads:` from each marker. Lateral loads are NOT followed transitively.
+wj_recall_chain() {
+  local root="$1" mem="$2"
+  local seen self d slug stop
+  self="$(wj_resolve_slug "$root" "$mem")"
+  printf 'self\t%s\n' "$self"
+  seen="|$self|"
+  _wj_loads "$root" "$mem" link "$seen"; seen="$_WJ_SEEN"
+  d="$(dirname "$root")"
+  while [ -n "$d" ] && [ "$d" != "/" ]; do
+    if [ -f "$d/.work-journal" ]; then
+      slug="$(wj_resolve_slug "$d" "$mem")"
+      case "$seen" in
+        *"|$slug|"*) ;;
+        *) printf 'parent\t%s\n' "$slug"; seen="$seen$slug|" ;;
+      esac
+      _wj_loads "$d" "$mem" link "$seen"; seen="$_WJ_SEEN"
+      stop="$(wj_marker_field "$d" root)"
+      case "$stop" in true|yes|1) break ;; esac
+    fi
+    d="$(dirname "$d")"
+  done
 }
 
 # Rebuild the top-level ROUTER.md from disk under journal dir $1 — always

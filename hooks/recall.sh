@@ -11,12 +11,10 @@ MEM="${WORK_JOURNAL_DIR:-$HOME/.claude/work-journal}"
 command -v jq >/dev/null 2>&1 || exit 0   # can't inject without jq (capture logs this)
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/lib.sh"
 
-# cwd selects the project; git root is the stable id. wj_resolve_slug handles
-# same-named repos (suffixes -2/-3 only on a real collision).
+# cwd selects the project; git root is the stable id. wj_recall_chain handles
+# same-named repos plus ancestor (.work-journal) and `loads:` inheritance.
 root="${CLAUDE_PROJECT_DIR:-$PWD}"
 root="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || echo "$root")"
-slug="$(wj_resolve_slug "$root" "$MEM")"
-idx="$MEM/$slug/INDEX.md"
 
 notice=""
 # Surface capture errors once, then rotate so we don't nag forever.
@@ -26,15 +24,26 @@ if [ -s "$MEM/.errors.log" ]; then
   mv -f "$MEM/.errors.log" "$MEM/.errors.log.shown" 2>/dev/null || true
 fi
 
-body=""
-count=0
-if [ -f "$idx" ]; then
-  count="$(grep -c '^- \[' "$idx" 2>/dev/null || echo 0)"
-  warn=""
-  # ponytail: flat 150-entry threshold; raise/lower if it nags too early/late.
-  [ "${count:-0}" -gt 150 ] && warn=" (this index has $count entries — consider trimming it)"
-  body="## Work journal — ${slug}${warn}"$'\n'"Prior task entries; open a file when one is relevant to what we are about to do:"$'\n\n'"$(cat "$idx")"
-fi
+# Walk the chain: self (the project you're in), then any inherited journals.
+self=""; count=0; extra=0; body=""
+while IFS="$(printf '\t')" read -r tag slug; do
+  [ -n "$slug" ] || continue
+  sidx="$MEM/$slug/INDEX.md"
+  if [ "$tag" = self ]; then
+    self="$slug"
+    [ -f "$sidx" ] || continue
+    count="$(grep -c '^- \[' "$sidx" 2>/dev/null || echo 0)"
+    warn=""
+    # ponytail: flat 150-entry threshold; raise/lower if it nags too early/late.
+    [ "${count:-0}" -gt 150 ] && warn=" (this index has $count entries — consider trimming it)"
+    body="## Work journal — ${slug}${warn}"$'\n'"Prior task entries; open a file when one is relevant to what we are about to do:"$'\n\n'"$(cat "$sidx")"
+  else
+    [ -f "$sidx" ] || continue
+    label="linked"; [ "$tag" = parent ] && label="ancestor"
+    body="${body}"$'\n\n'"## Linked journal — ${slug} (${label})"$'\n\n'"$(cat "$sidx")"
+    extra=$((extra+1))
+  fi
+done < <(wj_recall_chain "$root" "$MEM")
 
 ctx="${notice}${body}"
 
@@ -43,10 +52,11 @@ msg=""
 if [ -z "${WORK_JOURNAL_QUIET:-}" ]; then
   if [ "${count:-0}" -gt 0 ]; then
     word="entries"; [ "$count" = 1 ] && word="entry"
-    msg="📓 work journal · ${slug} · ${count} ${word}"
+    msg="📓 work journal · ${self} · ${count} ${word}"
   else
-    msg="📓 work journal · ${slug} · new project"
+    msg="📓 work journal · ${self} · new project"
   fi
+  [ "$extra" -gt 0 ] && msg="${msg} (+${extra} linked)"
 fi
 
 [ -n "$ctx$msg" ] || exit 0
