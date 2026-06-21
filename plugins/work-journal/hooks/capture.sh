@@ -14,6 +14,7 @@ MODEL="${CLAUDE_MEMORY_MODEL:-haiku}"
 CLI="${CLAUDE_BIN:-claude}"
 mkdir -p "$MEM" 2>/dev/null || true
 self="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/$(basename "${BASH_SOURCE[0]}")"
+source "$(dirname "$self")/lib.sh"
 
 # ============ worker (detached): does the slow work; output → .errors.log ============
 if [ "${1:-}" = "--worker" ]; then
@@ -23,7 +24,7 @@ if [ "${1:-}" = "--worker" ]; then
 
   root="${cwd:-$PWD}"
   root="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || echo "$root")"
-  slug="$(basename "$root")"
+  slug="$(wj_resolve_slug "$root" "$MEM")"
   dir="$MEM/$slug"
   day="$(date +%F)"
 
@@ -74,6 +75,7 @@ EOF
   fi
 
   mkdir -p "$dir"
+  [ -f "$dir/.source" ] || wj_source_id "$root" > "$dir/.source"   # claim this folder for this repo
   file="$day-$taskslug.md"
   printf '%s\n' "$body" > "$dir/$file"
 
@@ -105,7 +107,11 @@ input="$(cat)"   # hook payload on stdin
 transcript="$(printf '%s' "$input" | jq -r '.transcript_path // empty')"
 cwd="$(printf '%s' "$input" | jq -r '.cwd // empty')"
 sid="$(printf '%s' "$input" | jq -r '.session_id // empty')"
+why="$(printf '%s' "$input" | jq -r '.reason // .source // empty')"
 [ -f "$transcript" ] || exit 0
+# Don't journal a mid-session compaction — wait for the real end. (Verify the
+# exact reason value on your CC version; harmless if compaction doesn't fire SessionEnd.)
+case "$why" in compact|compaction) exit 0 ;; esac
 
 # nohup (POSIX, works on macOS too) detaches the worker; the hook exits immediately.
 nohup bash "$self" --worker "$transcript" "$cwd" "$sid" >> "$MEM/.errors.log" 2>&1 < /dev/null &

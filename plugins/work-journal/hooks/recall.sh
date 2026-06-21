@@ -9,11 +9,13 @@ set -uo pipefail
 
 MEM="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 command -v jq >/dev/null 2>&1 || exit 0   # can't inject without jq (capture logs this)
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/lib.sh"
 
-# cwd selects the project; git root is the stable id.
+# cwd selects the project; git root is the stable id. wj_resolve_slug handles
+# same-named repos (suffixes -2/-3 only on a real collision).
 root="${CLAUDE_PROJECT_DIR:-$PWD}"
 root="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || echo "$root")"
-slug="$(basename "$root")"
+slug="$(wj_resolve_slug "$root" "$MEM")"
 idx="$MEM/$slug/INDEX.md"
 
 notice=""

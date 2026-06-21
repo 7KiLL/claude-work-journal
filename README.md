@@ -65,6 +65,8 @@ Capture is **idempotent per session**: each entry's frontmatter carries its `ses
 - Capture is detached (`nohup`), so session exit is instant; the summary lands a few seconds later.
 - Entries are append-only, one per session — a journal is a log. Renaming a project orphans its old folder; use `/journal mv <old> <new>` to rename or merge.
 - Index/router writes are guarded with `flock` so parallel sessions don't clobber each other.
+- Two repos with the same folder name get distinct journals (`api`, then `api-2`). Identity is the git remote (else the repo path), recorded in each folder's `.source`; the suffix only appears on a real collision.
+- A SessionEnd fired by compaction is skipped, so a long session isn't journaled mid-task — only its real end is.
 - Recursion is prevented by a `CLAUDE_WORKJOURNAL_LOCK` env guard, since the capture step spawns its own `claude` session.
 - Requires `jq`, `git`, and the `claude` CLI; if `jq` or `claude` is missing the hooks no-op and log it instead of erroring.
 
