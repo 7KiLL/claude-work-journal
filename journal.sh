@@ -47,7 +47,14 @@ cmd="${1:-}"; [ $# -gt 0 ] && shift
 case "$cmd" in
   doctor)
     echo "journal dir: $MEM"
-    for b in jq git "$CLI"; do
+    if [ -n "${WORK_JOURNAL_SUMMARIZER:-}" ]; then
+      echo "summarizer:  $WORK_JOURNAL_SUMMARIZER (custom)"
+      deps="jq git"
+    else
+      echo "summarizer:  $CLI -p --model $MODEL"
+      deps="jq git $CLI"
+    fi
+    for b in $deps; do
       if command -v "$b" >/dev/null 2>&1; then echo "  dep ok:      $b"; else echo "  dep MISSING: $b"; fi
     done
     np=0
@@ -90,7 +97,7 @@ case "$cmd" in
       [ -f "$dir/$f" ] && { echo "### $f"; cat "$dir/$f"; echo; } >> "$catf"
     done
     summary="$( { printf 'Compress these older work-journal entries into a terse "Earlier work" digest — a handful of bullets capturing notable tasks, decisions, and gotchas. No fluff.\n\n'; cat "$catf"; } \
-                | WORK_JOURNAL_LOCK=1 "$CLI" -p --model "$MODEL" 2>/dev/null )" || true
+                | wj_summarize 2>/dev/null )" || true
     rm -f "$catf"
     [ -n "$summary" ] || summary="(digest unavailable — ${#oldfiles[@]} entries archived without summary)"
 

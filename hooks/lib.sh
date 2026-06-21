@@ -92,6 +92,19 @@ wj_recall_chain() {
   done
 }
 
+# Summarize: read a prompt on stdin, print the model's reply on stdout. Uses the
+# Claude CLI by default ($CLAUDE_BIN, $WORK_JOURNAL_MODEL). Set
+# WORK_JOURNAL_SUMMARIZER to a stdin-reading command to use Codex or any other
+# model (e.g. `codex exec`) on a box without `claude`. WORK_JOURNAL_LOCK stops
+# the nested call from re-firing our own hooks.
+wj_summarize() {
+  if [ -n "${WORK_JOURNAL_SUMMARIZER:-}" ]; then
+    WORK_JOURNAL_LOCK=1 bash -c "$WORK_JOURNAL_SUMMARIZER"
+  else
+    WORK_JOURNAL_LOCK=1 "${CLAUDE_BIN:-claude}" -p --model "${WORK_JOURNAL_MODEL:-haiku}"
+  fi
+}
+
 # Rebuild the top-level ROUTER.md from disk under journal dir $1 — always
 # consistent, no incremental diff logic.
 wj_rebuild_router() {

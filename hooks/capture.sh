@@ -59,7 +59,7 @@ EOF
   # Feed only the last $CAP bytes — a journal cares about how the session ended.
   out="$( cd "${TMPDIR:-/tmp}"
           { printf '%s\n\n=== TRANSCRIPT (tail) ===\n' "$PROMPT"; tail -c "$CAP" "$transcript"; } \
-            | WORK_JOURNAL_LOCK=1 "$CLI" -p --model "$MODEL" 2>/dev/null )" || true
+            | wj_summarize 2>/dev/null )" || true
   [ -n "$out" ] || { echo "[$(date -Is)] work-journal: summarizer failed/empty for $slug"; exit 0; }
 
   first="${out%%$'\n'*}"
@@ -96,7 +96,10 @@ fi
 
 # ============ dispatcher (fast): parse payload, spawn worker, return now ============
 command -v jq    >/dev/null 2>&1 || { echo "[$(date -Is)] work-journal: jq not installed — disabled" >> "$MEM/.errors.log"; exit 0; }
-command -v "$CLI" >/dev/null 2>&1 || { echo "[$(date -Is)] work-journal: '$CLI' not found — set CLAUDE_BIN" >> "$MEM/.errors.log"; exit 0; }
+# A custom summarizer (e.g. Codex) means `claude` need not be present.
+if [ -z "${WORK_JOURNAL_SUMMARIZER:-}" ]; then
+  command -v "$CLI" >/dev/null 2>&1 || { echo "[$(date -Is)] work-journal: '$CLI' not found — set CLAUDE_BIN or WORK_JOURNAL_SUMMARIZER" >> "$MEM/.errors.log"; exit 0; }
+fi
 
 input="$(cat)"   # hook payload on stdin
 transcript="$(printf '%s' "$input" | jq -r '.transcript_path // empty')"

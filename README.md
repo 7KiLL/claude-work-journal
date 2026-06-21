@@ -16,6 +16,27 @@ No database. Just `.md` files under `~/.claude/work-journal/`, grep-able and git
 
 Restart the session so the hooks load.
 
+### Codex
+
+Codex mirrors Claude Code's hook schema, so the **same scripts** run there — no
+rewrite. There's no marketplace; wire the hooks into `~/.codex/config.toml`:
+
+```
+bash install-codex.sh install      # appends a guarded block; `uninstall` removes it
+bash install-codex.sh print        # just print the block to paste yourself
+```
+
+This points Codex's `SessionStart` → `recall.sh` and `Stop` → `capture.sh`
+(Codex has no `SessionEnd`; `Stop` is the end-equivalent). If `claude` isn't on
+the box, set `WORK_JOURNAL_SUMMARIZER` to a stdin-reading command (e.g. `codex
+exec`) so capture can still summarize. Journals are shared across both tools —
+same `~/.claude/work-journal/` store, same `.work-journal` markers.
+
+Caveat: if your Codex build fires `Stop` per-turn rather than once at the end,
+capture writes the entry on the first substantive turn (idempotent by session
+id) — an early checkpoint, not the final state. Tell me and I'll switch capture
+to refresh-on-each-Stop.
+
 ## How it works
 
 The current working directory selects the project (git root, else the folder name) — that's the whole "router". Layout:
@@ -87,7 +108,8 @@ Capture is **idempotent per session**: each entry's frontmatter carries its `ses
 
 ## Requirements
 
-`jq`, `git`, and the `claude` CLI on PATH (all standard on a dev machine).
+`jq`, `git`, and a summarizer CLI — `claude` by default, or anything you point
+`WORK_JOURNAL_SUMMARIZER` at (e.g. `codex exec`).
 
 ## Config (env vars)
 
@@ -97,6 +119,7 @@ Capture is **idempotent per session**: each entry's frontmatter carries its `ses
 | `WORK_JOURNAL_MODEL` | `haiku` | model used to summarize sessions |
 | `WORK_JOURNAL_MAX_BYTES` | `200000` | max transcript bytes fed to the model (cost guard) |
 | `WORK_JOURNAL_QUIET` | unset | set to `1` to hide the session-start banner line |
+| `WORK_JOURNAL_SUMMARIZER` | unset | stdin-reading command to summarize with (e.g. `codex exec`); overrides the `claude` default |
 | `CLAUDE_BIN` | `claude` | path to the Claude CLI (set if not on `PATH`) |
 
 ## Notes
