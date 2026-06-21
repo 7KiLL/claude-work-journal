@@ -29,7 +29,13 @@ The current working directory selects the project (git root, else the folder nam
 ```
 
 - `SessionStart` (`recall.sh`) reads `<project>/INDEX.md` and feeds it to Claude as `additionalContext`. New project → silent.
-- `SessionEnd` (`capture.sh`) pipes the transcript to a cheap headless `claude -p`, which replies `SKIP` or a single entry. The script writes the file, prepends the index line, and rebuilds `ROUTER.md`.
+- `SessionEnd` (`capture.sh`) returns instantly and runs the work **detached**, so it never blocks or hangs your exit. The detached worker pipes the transcript to a cheap headless `claude -p`, which replies `SKIP` or a single entry; the script writes the file, prepends the index line, and rebuilds `ROUTER.md`.
+
+## Failure handling
+
+Hooks are fail-safe — they never block or crash a session. If the detached capture fails (model error, missing `jq`/`claude`, etc.) it appends a line to `~/.claude/memory/.errors.log` instead of erroring loudly. At the **next** session start, recall surfaces a one-line "work-journal logged N issue(s)" notice and rotates the log, so you find out without ever being interrupted mid-work.
+
+Capture is **idempotent per session**: each entry's frontmatter carries its `session:` id, and a session that's already been captured is skipped — so a hook firing twice (e.g. compact then exit) won't duplicate. recall also warns once an index grows past ~150 entries.
 
 ## Requirements
 
@@ -45,9 +51,11 @@ The current working directory selects the project (git root, else the folder nam
 
 ## Notes
 
-- Capture runs synchronously at session end (a few seconds). If that delay bothers you, wrap the `claude -p` block in `capture.sh` with `nohup … &`.
-- Entries are append-only, one per session. Merging/dedup across sessions is deliberately not done — a journal is a log.
+- Capture is detached (`nohup`), so session exit is instant; the summary lands a few seconds later.
+- Entries are append-only, one per session — a journal is a log. (Renaming a project orphans its old folder under the old name; a `journal mv` helper for that is planned.)
+- Index/router writes are guarded with `flock` so parallel sessions don't clobber each other.
 - Recursion is prevented by a `CLAUDE_WORKJOURNAL_LOCK` env guard, since the capture step spawns its own `claude` session.
+- Requires `jq`, `git`, and the `claude` CLI; if `jq` or `claude` is missing the hooks no-op and log it instead of erroring.
 
 ## Uninstall
 
