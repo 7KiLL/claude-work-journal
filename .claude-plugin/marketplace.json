@@ -1,0 +1,11 @@
+{
+  "name": "claude-work-journal",
+  "owner": { "name": "7KiLL" },
+  "plugins": [
+    {
+      "name": "work-journal",
+      "source": "./plugins/work-journal",
+      "description": "Per-project work journal via SessionStart/SessionEnd hooks."
+    }
+  ]
+}
