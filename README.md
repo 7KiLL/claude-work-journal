@@ -58,7 +58,12 @@ What recall loads at session start:
 
 Empty marker (`touch .work-journal`) is valid — just names a node after its dir.
 Markers are plain `key: value`; an empty/missing field falls back to the default.
-Ask Claude to create or edit one for you; there's no schema to learn.
+Manage them with `/journal link` / `unlink`, or ask Claude — there's no schema to learn:
+
+```
+/journal link ~/RiderProjects slug=rider root=true loads=fe
+/journal chain ~/RiderProjects/projectA      # preview what recall will pull in
+```
 
 ## Failure handling
 
@@ -76,6 +81,9 @@ Capture is **idempotent per session**: each entry's frontmatter carries its `ses
 | `ls` | list projects and entry counts |
 | `trim <project> [N]` | keep the newest N entries (default 30); summarize the rest into `archive.md` |
 | `mv <from> <to>` | rename a project's journal, or merge it into an existing one |
+| `link <dir> [k=v…]` | create/update a `.work-journal` marker — `slug=`, `root=`, `loads=` (loads union in) |
+| `unlink <dir> [slug]` | remove the marker, or just one slug from its `loads` |
+| `chain [dir]` | preview what recall would load from `<dir>` (self + ancestors + loads) |
 
 ## Requirements
 
