@@ -1,140 +1,196 @@
-# work-journal
+# 📓 work-journal
 
-A Claude Code plugin that keeps a **per-project work journal** in plain markdown.
+> **Your AI forgets every session. This remembers.**
 
-- **Session start** → injects the current project's past task summaries into context, so Claude knows what you've already done here.
-- **Session end** → distills the finished session into one dated `.md` entry (or skips it if nothing durable happened).
+A plugin for **Claude Code** (and **Codex**) that keeps a **per-project work
+journal** in plain markdown. It quietly answers the question you hit at the start
+of every session — *"wait, what was I doing here last time?"*
 
-No database. Just `.md` files under `~/.claude/work-journal/`, grep-able and git-able.
+- 🟢 **Session start** → injects this project's past task summaries into context, so your agent already knows the history.
+- 🔴 **Session end** → distills the finished session into one dated `.md` entry (or skips it if nothing durable happened).
 
-## Install
+No database. No cloud. Just `.md` files under `~/.claude/work-journal/` — grep-able, git-able, yours.
+
+---
+
+## 🎬 See it in action
+
+Open a session in a project you've worked on before, and the first thing you see:
+
+```
+📓 work journal · this-is-fine-bot · 12 entries
+```
+
+Behind that line, your agent silently receives the project's index:
+
+```markdown
+# this-is-fine-bot — work journal
+
+- [2026-06-21 fix-auth-token-refresh-race](2026-06-21-fix-auth-token-refresh-race.md) — single-flight lock for token refresh
+- [2026-06-19 add-webhook-rate-limit](2026-06-19-add-webhook-rate-limit.md) — sliding-window limiter on /webhook
+```
+
+When you wrap up, a session becomes one tidy entry — written for you, automatically:
+
+```markdown
+---
+task: Fix auth token refresh race
+status: done
+files: auth/refresh.ts, auth/middleware.ts
+---
+Concurrent 401s were firing N parallel token refreshes. Added a single-flight
+lock so only one refresh runs and the rest await it. 🪤 Gotcha: the old code
+cached the promise but not the abort signal — fixed. Covered in refresh.test.ts.
+```
+
+That's the whole loop. You never write a line of it.
+
+---
+
+## 📦 Install
+
+### Claude Code
 
 ```
 /plugin marketplace add 7KiLL/claude-work-journal
 /plugin install work-journal@claude-work-journal
 ```
 
-Restart the session so the hooks load.
+Restart the session so the hooks load. ✅
 
 ### Codex
 
-The same repo installs natively in Codex, which shares Claude Code's plugin and
-hook schema:
+Same repo, installs natively — Codex shares Claude Code's plugin & hook schema:
 
 ```
 codex plugin marketplace add 7KiLL/claude-work-journal
 ```
 
-Then open `/plugins` in Codex and install **Work Journal**. It wires
-`SessionStart` → recall and `Stop` → capture (Codex's session-end event) and
-shares the same `~/.claude/work-journal/` store and `.work-journal` markers as
-Claude Code, so journals carry across both tools. Capture summarizes with
-`claude` when present, otherwise Codex; set `WORK_JOURNAL_SUMMARIZER` to use a
-specific command.
+Then open `/plugins` in Codex and install **Work Journal**. Journals are shared
+across both tools (same store, same markers), so a project journaled in Claude
+Code shows up in Codex and vice-versa. 🤝
 
-## How it works
+---
 
-The current working directory selects the project (git root, else the folder name) — that's the whole "router". Layout:
+## 🧠 How it works
+
+Your **current directory picks the project** (git root, else the folder name) —
+that's the entire router. No config, no registration.
 
 ```
 ~/.claude/work-journal/
-  ROUTER.md                       # auto-rebuilt map of all projects
-  <project>/
-    INDEX.md                      # one line per entry, newest first  ← injected at session start
-    2026-06-21-fix-auth-race.md   # one session = one entry
+├── ROUTER.md                        # 🗺️  auto-rebuilt map of every project
+└── this-is-fine-bot/
+    ├── INDEX.md                     # 📑  one line per entry, newest first → injected at start
+    ├── 2026-06-21-fix-auth-race.md  # 📝  one session = one entry
+    └── 2026-06-19-add-rate-limit.md
 ```
 
-- `SessionStart` (`recall.sh`) reads `<project>/INDEX.md` and feeds it to Claude as `additionalContext`. New project → silent.
-- `SessionEnd` (`capture.sh`) returns instantly and runs the work **detached**, so it never blocks or hangs your exit. The detached worker pipes the transcript to a cheap headless `claude -p`, which replies `SKIP` or a single entry; the script writes the file, prepends the index line, and rebuilds `ROUTER.md`.
+- **Recall** reads `<project>/INDEX.md` and hands it to your agent as context. New project? Stays silent.
+- **Capture** returns instantly and runs **detached** — it never blocks or hangs your exit. The background worker pipes the transcript to a cheap headless model, which replies `SKIP` or a single entry, then writes the file and updates the index.
 
-## Linking projects (`.work-journal`)
+---
 
-By default each git repo is its own journal. To connect several — a directory of
-microservices, a backend that reads a frontend's journal — drop a `.work-journal`
-marker file. It turns a plain directory into a journal node and recall **inherits
-upward**.
+## 🔗 Linking projects
 
-```
-# ~/RiderProjects/.work-journal  — a folder-of-repos, not itself a repo
-slug: rider           # optional: name the journal (default: the dir name)
-root: true            # optional: stop the upward walk here (don't ascend past it)
-loads: fe, projectC   # optional: also load these journals (by slug, one hop)
-```
-
-What recall loads at session start:
-
-- **self** — the project you're in (git root, as before). Writes always go here.
-- **ancestors** — every `.work-journal` dir above you, walking up until `root: true`
-  or `/`. So opening Claude in `~/RiderProjects/projectA` loads `projectA` **+**
-  the `rider` parent. Opening in `~/RiderProjects` loads only `rider` — a parent
-  never loads its children.
-- **`loads:`** — any other journals by slug, one hop (no transitive). Storage is
-  flat by slug, so a load reaches **any** project regardless of where its repo
-  lives on disk — `~/RiderProjects` can `loads: fe` from `~/PhpstormProjects`.
-
-Empty marker (`touch .work-journal`) is valid — just names a node after its dir.
-Markers are plain `key: value`; an empty/missing field falls back to the default.
-Manage them with `/journal link` / `unlink`, or ask Claude — there's no schema to learn:
+By default each repo is its own journal. But real work is rarely one repo — a
+folder of microservices, a backend that leans on a frontend. Drop a
+`.work-journal` marker and recall **inherits upward**. 🌳
 
 ```
-/journal link ~/RiderProjects slug=rider root=true loads=fe
-/journal chain ~/RiderProjects/projectA      # preview what recall will pull in
+# ~/RiderProjects/.work-journal   (a folder-of-repos, not itself a repo)
+slug: rider           # 🏷️  name the journal      (default: the dir name)
+root: true            # ⛔  stop walking up here   (don't ascend to ~)
+loads: fe             # 🔌  also pull these journals by slug (one hop)
 ```
 
-## Failure handling
+Now identity follows the **tree**, not the disk:
 
-Hooks are fail-safe — they never block or crash a session. If the detached capture fails (model error, missing `jq`/`claude`, etc.) it appends a line to `~/.claude/work-journal/.errors.log` instead of erroring loudly. At the **next** session start, recall surfaces a one-line "work-journal logged N issue(s)" notice and rotates the log, so you find out without ever being interrupted mid-work.
+```
+~/RiderProjects/                 .work-journal → rider (root, loads: fe)
+├── 📁 gateway/  (git repo)  ──▶  recalls  gateway + rider + fe
+└── 📁 billing/  (git repo)  ──▶  recalls  billing + rider + fe
 
-Capture is **idempotent per session**: each entry's frontmatter carries its `session:` id, and a session that's already been captured is skipped — so a hook firing twice (e.g. compact then exit) won't duplicate. recall also warns once an index grows past ~150 entries.
+~/PhpstormProjects/
+└── 📁 storefront/ (git repo)     .work-journal → slug: fe
+```
 
-## Commands
+The rules, in one breath:
 
-`/journal <subcommand>` (or run `bash journal.sh` from the plugin directly):
+| | Loads at session start | Writes to |
+|---|---|---|
+| 🧒 **child** (`gateway/`) | itself **+ every ancestor** marker **+ their `loads:`** | itself |
+| 👨‍👦 **parent** (`RiderProjects/`) | itself only — *never* its children | itself |
+| 🔌 **`loads:`** | any journal by slug, **one hop**, any tree (storage is flat) | — |
+
+So orchestrating a cross-service feature from `~/RiderProjects` lands in the
+`rider` journal; later, working inside `gateway/`, you see `gateway` **and** that
+`rider` context **and** the `fe` frontend's. 🎯
+
+Manage markers with the CLI (or just ask your agent — there's no schema):
+
+```bash
+/journal link  ~/RiderProjects slug=rider root=true loads=fe
+/journal chain ~/RiderProjects/gateway      # 🔍 preview exactly what recall will pull in
+```
+
+---
+
+## 🛠️ Commands
+
+`/journal <subcommand>`, or the dedicated `/journal-*` commands, or `bash journal.sh …`:
 
 | Command | Does |
 |---------|------|
-| `doctor` | dependency check, project count, recent errors |
-| `ls` | list projects and entry counts |
-| `trim <project> [N]` | keep the newest N entries (default 30); summarize the rest into `archive.md` |
-| `mv <from> <to>` | rename a project's journal, or merge it into an existing one |
-| `link <dir> [k=v…]` | create/update a `.work-journal` marker — `slug=`, `root=`, `loads=` (loads union in) |
-| `unlink <dir> [slug]` | remove the marker, or just one slug from its `loads` |
-| `chain [dir]` | preview what recall would load from `<dir>` (self + ancestors + loads) |
+| 🩺 `doctor` | dependency check, project count, recent errors |
+| 📂 `ls` | list projects and entry counts |
+| ✂️ `trim <project> [N]` | keep the newest N entries (default 30); summarize the rest into `archive.md` |
+| 🔀 `mv <from> <to>` | rename a project's journal, or merge it into another |
+| 🔗 `link <dir> [k=v…]` | create/update a `.work-journal` marker — `slug=`, `root=`, `loads=` (loads union in) |
+| ✖️ `unlink <dir> [slug]` | remove the marker, or just one slug from its `loads` |
+| 🔍 `chain [dir]` | preview what recall would load (self + ancestors + loads) |
 
-## Requirements
+---
 
-`jq`, `git`, and a summarizer CLI — `claude` by default, or anything you point
-`WORK_JOURNAL_SUMMARIZER` at (e.g. `codex exec`).
+## 🛟 Fail-safe by design
 
-## Config (env vars)
+The whole point is to help quietly — so it's built to **never get in your way**:
+
+- 🧯 **Never blocks, never crashes.** Capture is detached; your session exits instantly and the summary lands a few seconds later.
+- 🔁 **Idempotent per session.** Each entry carries its `session:` id, so a hook firing twice (compact, then exit) won't duplicate.
+- 🤫 **Errors whisper, they don't shout.** A failed capture logs one line to `.errors.log`; the **next** session start surfaces a single "logged N issue(s)" notice and rotates it. You find out without ever being interrupted mid-work.
+- 🔒 **Parallel-safe.** Index/router writes are `flock`-guarded so concurrent sessions can't clobber each other.
+- 🪶 **Bounded cost.** Only the transcript tail (`WORK_JOURNAL_MAX_BYTES`) is summarized, by a cheap model.
+
+---
+
+## ⚙️ Config
+
+All optional — sensible defaults out of the box.
 
 | Var | Default | Purpose |
 |-----|---------|---------|
 | `WORK_JOURNAL_DIR` | `~/.claude/work-journal` | where journals live |
 | `WORK_JOURNAL_MODEL` | `haiku` | model used to summarize sessions |
 | `WORK_JOURNAL_MAX_BYTES` | `200000` | max transcript bytes fed to the model (cost guard) |
-| `WORK_JOURNAL_QUIET` | unset | set to `1` to hide the session-start banner line |
-| `WORK_JOURNAL_SUMMARIZER` | unset | stdin-reading command to summarize with (e.g. `codex exec`); overrides the `claude` default |
-| `CLAUDE_BIN` | `claude` | path to the Claude CLI (set if not on `PATH`) |
+| `WORK_JOURNAL_QUIET` | unset | set to `1` to hide the session-start banner |
+| `WORK_JOURNAL_SUMMARIZER` | unset | a stdin-reading command to summarize with (e.g. `codex exec`); overrides the default |
+| `CLAUDE_BIN` | `claude` | path to the Claude CLI if it's not on `PATH` |
 
-## Notes
+**Requirements:** `jq`, `git`, and a summarizer — `claude` by default, falling
+back to `codex`, or anything you point `WORK_JOURNAL_SUMMARIZER` at. If `jq` or
+every summarizer is missing, the hooks simply no-op and log it. 🪶
 
-- At session start you get a visible `📓 work journal · <project> · N entries` line (via the hook's `systemMessage`); a `(+K linked)` suffix shows when ancestor/`loads:` journals were pulled in. The built-in welcome banner itself can't be modified — it renders before any hook runs. Silence the line with `WORK_JOURNAL_QUIET=1`.
-- Capture is detached (`nohup`), so session exit is instant; the summary lands a few seconds later.
-- Entries are append-only, one per session — a journal is a log. Renaming a project orphans its old folder; use `/journal mv <old> <new>` to rename or merge.
-- Index/router writes are guarded with `flock` so parallel sessions don't clobber each other.
-- Two repos with the same folder name get distinct journals (`api`, then `api-2`). Identity is the git remote (else the repo path), recorded in each folder's `.source`; the suffix only appears on a real collision.
-- A SessionEnd fired by compaction is skipped, so a long session isn't journaled mid-task — only its real end is.
-- Recursion is prevented by a `WORK_JOURNAL_LOCK` env guard, since the capture step spawns its own `claude` session.
-- Only the last `WORK_JOURNAL_MAX_BYTES` of the transcript is summarized — bounds cost/latency on very long sessions.
-- Requires `jq` and a summarizer (`claude`, `codex`, or `WORK_JOURNAL_SUMMARIZER`); if `jq` or every summarizer is missing, the hooks no-op and log it instead of erroring.
+---
 
-## Uninstall
+## 🧹 Uninstall
 
 ```
 /plugin uninstall work-journal@claude-work-journal
 ```
 
-Your journals under `~/.claude/work-journal/` are left untouched.
+Your journals under `~/.claude/work-journal/` are left untouched. 📦
 
-MIT
+---
+
+<sub>MIT · made for people who close the laptop mid-thought.</sub>
