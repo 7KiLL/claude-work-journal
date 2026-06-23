@@ -75,7 +75,10 @@ Code shows up in Codex and vice-versa. 🤝
 ## 🧠 How it works
 
 Your **current directory picks the project** (git root, else the folder name) —
-that's the entire router. No config, no registration.
+that's the entire router. No config, no registration. Git **worktrees** — including
+the throwaway ones Claude Code spins up per task — all resolve to their **main
+repo**, so every worktree shares the one journal instead of fragmenting into a
+slug-per-worktree that orphans itself when the worktree is deleted.
 
 ```
 ~/.claude/work-journal/

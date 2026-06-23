@@ -2,7 +2,24 @@
 # Shared helpers for the work-journal hooks and CLI. Sourced by recall.sh,
 # capture.sh and journal.sh so they all agree on slug resolution and the router.
 
+# Resolve $1 to the project's *main* worktree root. Git worktrees — including the
+# ephemeral ones Claude Code/paseo spin up per task — each report their own
+# `--show-toplevel` and a different basename, which would mint a fresh slug per
+# worktree and scatter (then orphan) entries when the worktree is removed. `git
+# worktree list` always prints the main worktree first, so any linked worktree
+# maps back to the one shared identity. Falls back to the plain toplevel, then to
+# $1 itself, for non-worktree / non-git directories.
+wj_repo_root() {
+  local start="$1" main
+  main="$(git -C "$start" worktree list --porcelain 2>/dev/null \
+            | awk '/^worktree /{print substr($0,10); exit}')"
+  [ -n "$main" ] && { printf '%s' "$main"; return 0; }
+  git -C "$start" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$start"
+}
+
 # Stable identity of the repo rooted at $1: its git remote, else its abs path.
+# Pass a main-worktree root (see wj_repo_root) so linked worktrees of a remoteless
+# repo don't each resolve to a distinct path-based id.
 wj_source_id() {
   local root="$1" url
   url="$(git -C "$root" config --get remote.origin.url 2>/dev/null || true)"

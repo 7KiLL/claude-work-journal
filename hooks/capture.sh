@@ -23,8 +23,9 @@ if [ "${1:-}" = "--worker" ]; then
   transcript="${2:-}"; cwd="${3:-}"; sid="${4:-}"
   [ -f "$transcript" ] || exit 0
 
-  root="${cwd:-$PWD}"
-  root="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || echo "$root")"
+  # Map any linked worktree back to the main repo so the entry lands in the same
+  # journal recall reads from — not a per-worktree slug that vanishes with it.
+  root="$(wj_repo_root "${cwd:-$PWD}")"
   slug="$(wj_resolve_slug "$root" "$MEM")"
   dir="$MEM/$slug"
   day="$(date +%F)"

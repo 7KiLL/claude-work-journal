@@ -11,10 +11,11 @@ MEM="${WORK_JOURNAL_DIR:-$HOME/.claude/work-journal}"
 command -v jq >/dev/null 2>&1 || exit 0   # can't inject without jq (capture logs this)
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/lib.sh"
 
-# cwd selects the project; git root is the stable id. wj_recall_chain handles
-# same-named repos plus ancestor (.work-journal) and `loads:` inheritance.
-root="${CLAUDE_PROJECT_DIR:-$PWD}"
-root="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || echo "$root")"
+# cwd selects the project; the main-worktree root is the stable id, so every
+# linked worktree (incl. Claude Code's per-task ones) shares one journal instead
+# of spawning a new slug. wj_recall_chain handles same-named repos plus ancestor
+# (.work-journal) and `loads:` inheritance.
+root="$(wj_repo_root "${CLAUDE_PROJECT_DIR:-$PWD}")"
 
 notice=""
 # Surface capture errors once, then rotate so we don't nag forever.

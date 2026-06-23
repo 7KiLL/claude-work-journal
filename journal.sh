@@ -172,7 +172,7 @@ case "$cmd" in
 
   chain)
     dir="${1:-$PWD}"
-    root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || echo "$dir")"
+    root="$(wj_repo_root "$dir")"
     echo "recall chain for $root:"
     while IFS="$(printf '\t')" read -r tag slug; do
       [ -n "$slug" ] || continue
