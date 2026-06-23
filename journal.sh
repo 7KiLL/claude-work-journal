@@ -21,19 +21,6 @@ work-journal — manage ~/.claude/work-journal
 EOF
 }
 
-index_lines() { grep '^- \[' "$1" 2>/dev/null || true; }   # the "- [date slug](file) — hook" lines
-
-# Union two comma/space lists into a "a, b, c" string, order-preserving, deduped.
-merge_loads() {
-  local tok out="" seen="|"
-  for tok in ${1//,/ } ${2//,/ }; do
-    [ -n "$tok" ] || continue
-    case "$seen" in *"|$tok|"*) continue ;; esac
-    out="${out:+$out, }$tok"; seen="$seen$tok|"
-  done
-  printf '%s' "$out"
-}
-
 # (Re)write $1/.work-journal from slug/root/loads ($2/$3/$4); empty fields drop out.
 write_marker() {
   local f="$1/.work-journal"
@@ -47,21 +34,26 @@ cmd="${1:-}"; [ $# -gt 0 ] && shift
 case "$cmd" in
   doctor)
     echo "journal dir: $MEM"
+    deps="jq git"
     if [ -n "${WORK_JOURNAL_SUMMARIZER:-}" ]; then
-      echo "summarizer:  $WORK_JOURNAL_SUMMARIZER (custom)"; deps="jq git"
+      echo "summarizer:  $WORK_JOURNAL_SUMMARIZER (custom)"
     elif command -v "$CLI" >/dev/null 2>&1; then
-      echo "summarizer:  $CLI -p --model $MODEL"; deps="jq git $CLI"
+      echo "summarizer:  $CLI -p --model $MODEL"; deps="$deps $CLI"
     elif command -v codex >/dev/null 2>&1; then
-      echo "summarizer:  codex exec (claude not found)"; deps="jq git codex"
+      echo "summarizer:  codex exec (claude not found)"; deps="$deps codex"
     else
-      echo "summarizer:  NONE — install claude/codex or set WORK_JOURNAL_SUMMARIZER"; deps="jq git $CLI"
+      echo "summarizer:  NONE — install claude/codex or set WORK_JOURNAL_SUMMARIZER"
     fi
     for b in $deps; do
       if command -v "$b" >/dev/null 2>&1; then echo "  dep ok:      $b"; else echo "  dep MISSING: $b"; fi
     done
-    np=0
-    if [ -d "$MEM" ]; then for d in "$MEM"/*/; do [ -d "$d" ] && np=$((np+1)); done; fi
-    echo "projects: $np"
+    np=0; ne=0
+    if [ -d "$MEM" ]; then for d in "$MEM"/*/INDEX.md; do
+      [ -e "$d" ] || continue
+      np=$((np+1))
+      c="$(wj_entry_lines "$d" | grep -c '' 2>/dev/null || true)"; ne=$((ne+${c:-0}))
+    done; fi
+    echo "projects: $np (${ne} entries total)"
     for f in "$MEM/.errors.log" "$MEM/.errors.log.shown"; do
       [ -s "$f" ] && { echo "--- $(basename "$f") (last 20) ---"; tail -n 20 "$f"; }
     done
@@ -74,7 +66,7 @@ case "$cmd" in
       [ -e "$p" ] || continue
       found=1
       d="$(basename "$(dirname "$p")")"
-      n="$(grep -c '^- ' "$p" 2>/dev/null || true)"; n="${n:-0}"
+      n="$(wj_entry_lines "$p" | grep -c '' 2>/dev/null || true)"; n="${n:-0}"
       printf '%-30s %s entries\n' "$d" "$n"
     done
     [ "$found" = 1 ] || echo "(no projects)"
@@ -86,7 +78,7 @@ case "$cmd" in
     dir="$MEM/$proj"; idx="$dir/INDEX.md"
     [ -f "$idx" ] || { echo "no such project: $proj"; exit 1; }
     lines=()
-    while IFS= read -r l; do lines+=("$l"); done < <(index_lines "$idx")
+    while IFS= read -r l; do lines+=("$l"); done < <(wj_entry_lines "$idx")
     total=${#lines[@]}
     [ "$total" -gt "$keep" ] || { echo "$total entries; nothing to trim (keep=$keep)"; exit 0; }
     keeplines=( "${lines[@]:0:$keep}" )
@@ -106,8 +98,15 @@ case "$cmd" in
     arch="$dir/archive.md"
     { [ -f "$arch" ] && cat "$arch"; printf '\n## Trimmed %s (%d entries)\n\n%s\n' "$(date +%F)" "${#oldfiles[@]}" "$summary"; } > "$arch.tmp" && mv "$arch.tmp" "$arch"
     for f in "${oldfiles[@]}"; do rm -f "$dir/$f"; done
-    { head -n 2 "$idx"; printf '%s\n' "${keeplines[@]}"; printf -- '- [archive](archive.md) — older entries, summarized\n'; } > "$idx.tmp" && mv "$idx.tmp" "$idx"
-    wj_rebuild_router "$MEM"
+    # Serialize the index/router rewrite against parallel capture sessions. wj_entry_lines
+    # already dropped any stale `- [archive]` row, so we append exactly one fresh one.
+    {
+      flock 9 2>/dev/null || true
+      tmp="$(mktemp)"
+      { head -n 2 "$idx"; printf '%s\n' "${keeplines[@]}"; printf -- '- [archive](archive.md) — older entries, summarized\n'; } > "$tmp"
+      mv "$tmp" "$idx"
+      wj_rebuild_router "$MEM"
+    } 9>"$MEM/.lock"
     echo "trimmed ${#oldfiles[@]} entries into archive.md; kept $keep newest"
     ;;
 
@@ -118,22 +117,54 @@ case "$cmd" in
     [ -d "$src" ] || { echo "no such project: $from"; exit 1; }
     if [ ! -d "$dst" ]; then
       mv "$src" "$dst"
+      { flock 9 2>/dev/null || true; wj_rebuild_router "$MEM"; } 9>"$MEM/.lock"
       echo "renamed $from -> $to"
     else
+      # Move entry files; rename on collision (<base>-2.md, -3.md …) so no entry
+      # is silently dropped. Track renames to fix up index link targets below.
+      declare -A renamed=()
       for f in "$src"/*.md; do
         [ -e "$f" ] || continue
         bn="$(basename "$f")"
         case "$bn" in INDEX.md|archive.md) continue ;; esac
-        mv -n "$f" "$dst/$bn"
+        if [ ! -e "$dst/$bn" ]; then
+          mv "$f" "$dst/$bn"
+        else
+          base="${bn%.md}"; n=2
+          while [ -e "$dst/$base-$n.md" ]; do n=$((n+1)); done
+          newbn="$base-$n.md"
+          mv "$f" "$dst/$newbn"
+          renamed["$bn"]="$newbn"
+        fi
       done
       [ -f "$src/archive.md" ] && cat "$src/archive.md" >> "$dst/archive.md"
-      header="$(head -n 1 "$dst/INDEX.md" 2>/dev/null || echo "# $to — work journal")"
-      merged="$( { index_lines "$dst/INDEX.md"; index_lines "$src/INDEX.md"; } | sort -r | awk '!seen[$0]++' )"
-      { printf '%s\n\n' "$header"; printf '%s\n' "$merged"; } > "$dst/INDEX.md"
-      rm -rf "$src"
+      # Serialize the index/router rewrite against parallel capture sessions.
+      {
+        flock 9 2>/dev/null || true
+        header="$(head -n 1 "$dst/INDEX.md" 2>/dev/null || echo "# $to — work journal")"
+        tmp="$(mktemp)"
+        # Merge entry lines (archive rows excluded by wj_entry_lines). Rewrite the
+        # link target of any src line whose file was renamed, then dedup by link
+        # target so same-text different-file entries survive while true dupes fold.
+        {
+          wj_entry_lines "$dst/INDEX.md"
+          wj_entry_lines "$src/INDEX.md" | while IFS= read -r l; do
+            tgt="${l#*](}"; tgt="${tgt%%)*}"
+            if [ -n "${renamed[$tgt]+x}" ]; then
+              pre="${l%%\]*}]"; rest="${l#*\]}"; rest="${rest#*\)}"
+              printf '%s\n' "${pre}(${renamed[$tgt]})${rest}"
+            else
+              printf '%s\n' "$l"
+            fi
+          done
+        } | sort -r | awk 'match($0,/\]\([^)]*\)/){t=substr($0,RSTART+2,RLENGTH-3); if(!seen[t]++) print $0}' >> "$tmp"
+        { printf '%s\n\n' "$header"; cat "$tmp"; } > "$dst/INDEX.md"
+        rm -f "$tmp"
+        rm -rf "$src"
+        wj_rebuild_router "$MEM"
+      } 9>"$MEM/.lock"
       echo "merged $from into $to"
     fi
-    wj_rebuild_router "$MEM"
     ;;
 
   link)

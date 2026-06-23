@@ -18,11 +18,18 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/lib.sh"
 root="$(wj_repo_root "${CLAUDE_PROJECT_DIR:-$PWD}")"
 
 notice=""
-# Surface capture errors once, then rotate so we don't nag forever.
+# Surface capture errors once, then rotate so we don't nag forever. Serialize the
+# size-check + rename on the shared lock so two concurrent SessionStarts don't
+# both rotate (and one lose the notice).
 if [ -s "$MEM/.errors.log" ]; then
-  n="$(grep -c '' "$MEM/.errors.log" 2>/dev/null || echo '?')"
-  notice="⚠️ work-journal logged $n issue(s) since last session — see $MEM/.errors.log"$'\n\n'
-  mv -f "$MEM/.errors.log" "$MEM/.errors.log.shown" 2>/dev/null || true
+  {
+    flock 9 2>/dev/null || true
+    if [ -s "$MEM/.errors.log" ]; then
+      n="$(grep -c '' "$MEM/.errors.log" 2>/dev/null || echo '?')"
+      notice="⚠️ work-journal logged $n issue(s) since last session — see $MEM/.errors.log"$'\n\n'
+      mv -f "$MEM/.errors.log" "$MEM/.errors.log.shown" 2>/dev/null || true
+    fi
+  } 9>"$MEM/.lock"
 fi
 
 # Walk the chain: self (the project you're in), then any inherited journals.
@@ -33,7 +40,7 @@ while IFS="$(printf '\t')" read -r tag slug; do
   if [ "$tag" = self ]; then
     self="$slug"
     [ -f "$sidx" ] || continue
-    count="$(grep -c '^- \[' "$sidx" 2>/dev/null || echo 0)"
+    count="$(wj_entry_lines "$sidx" | grep -c '' 2>/dev/null || echo 0)"
     warn=""
     # ponytail: flat 150-entry threshold; raise/lower if it nags too early/late.
     [ "${count:-0}" -gt 150 ] && warn=" (this index has $count entries — consider trimming it)"

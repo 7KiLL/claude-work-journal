@@ -79,12 +79,27 @@ EOF
 
   mkdir -p "$dir"
   [ -f "$dir/.source" ] || wj_source_id "$root" > "$dir/.source"   # claim this folder for this repo
-  file="$day-$taskslug.md"
-  printf '%s\n' "$body" > "$dir/$file"
 
-  # Serialize shared index/router writes so parallel sessions can't clobber them.
+  # Serialize entry-file creation + index/router writes so parallel sessions
+  # can't clobber each other or race on a filename collision.
   {
     flock 9 2>/dev/null || true
+    file="$day-$taskslug.md"
+    # Filename collision guard (B5): an existing same-named file is either this
+    # same session (idempotent no-op — already caught dir-wide above, but guard
+    # anyway) or a *different* session that minted the same day+slug. In the
+    # latter case pick a free -2/-3 … suffix on the filename instead of
+    # clobbering the prior entry.
+    if [ -e "$dir/$file" ]; then
+      ext_sid="$(awk -F': ' '/^session:/{gsub(/[[:space:]]/,"",$2); print $2; exit}' "$dir/$file" 2>/dev/null || true)"
+      if [ -n "$sid" ] && [ "$ext_sid" = "$sid" ]; then
+        exit 0
+      fi
+      base="${file%.md}"; n=2
+      while [ -e "$dir/$base-$n.md" ]; do n=$((n+1)); done
+      file="$base-$n.md"
+    fi
+    printf '%s\n' "$body" > "$dir/$file"
     idx="$dir/INDEX.md"
     [ -f "$idx" ] || printf '# %s — work journal\n\n' "$slug" > "$idx"
     tmp="$(mktemp)"
@@ -109,8 +124,9 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd // empty')"
 sid="$(printf '%s' "$input" | jq -r '.session_id // empty')"
 why="$(printf '%s' "$input" | jq -r '.reason // .source // empty')"
 [ -f "$transcript" ] || exit 0
-# Don't journal a mid-session compaction — wait for the real end. (Verify the
-# exact reason value on your CC version; harmless if compaction doesn't fire SessionEnd.)
+# Don't journal a mid-session compaction — wait for the real end. Claude-specific:
+# CC fires SessionEnd with reason=compact; Codex's Stop hook has no compaction
+# (its schema lacks reason/source — the guard below is a harmless no-op there).
 case "$why" in compact|compaction) exit 0 ;; esac
 
 # nohup (POSIX, works on macOS too) detaches the worker; the hook exits immediately.

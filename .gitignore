@@ -1,0 +1,3 @@
+# Local tooling directories (not part of the plugin).
+.claude/
+.kilo/

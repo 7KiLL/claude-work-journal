@@ -39,6 +39,14 @@ wj_marker_field() {
   printf '%s' "$val"
 }
 
+# Print only real entry lines (`- [YYYY-MM-DD slug](file) — hook`) from $1,
+# dropping the `- [archive]` row and any other `- [` lines. Centralized so
+# trim/mv/ls/recall/router all agree on what counts as an entry: the link text
+# always starts with the 4-digit date written by capture.sh as `date +%F`.
+wj_entry_lines() {
+  grep -E '^- \[[0-9]{4}-' "$1" 2>/dev/null || true
+}
+
 # Echo the journal slug for repo root $1 under journal dir $2. Read-only; never
 # creates anything. Pretty name by default; suffixes -2/-3… only on a real
 # collision (a *different* repo that already owns the base name).
@@ -67,19 +75,41 @@ wj_resolve_slug() {
   printf '%s' "$base-$i"
 }
 
+# Order-preserving union of the tokens in args $3.. against the seen-set value
+# in $1. Prints each newly-seen token — prefixed with `$2\t` when $2 is non-empty
+# (so callers can tag them), bare otherwise — and threads the updated set out via
+# $_WJ_SEEN. Shared dedup core: _wj_loads passes a tag and relies on the
+# out-param; merge_loads passes an empty tag and joins the printed tokens.
+wj_union_loads() {
+  _WJ_SEEN="$1"; local tag="$2" tok
+  for tok in "${@:3}"; do
+    [ -n "$tok" ] || continue
+    case "$_WJ_SEEN" in *"|$tok|"*) continue ;; esac
+    if [ -n "$tag" ]; then printf '%s\t%s\n' "$tag" "$tok"; else printf '%s\n' "$tok"; fi
+    _WJ_SEEN="$_WJ_SEEN$tok|"
+  done
+}
+
 # Emit `<tag>\t<slug>` for each `loads:` entry of the marker in $1, skipping
 # slugs already in the seen-set $4. Threads the updated set out via $_WJ_SEEN
 # (bash can't return a string and print lines at once).
 _wj_loads() {
-  local dir="$1" tag="$3" loads tok
-  _WJ_SEEN="$4"
+  local dir="$1" tag="$3" loads
   loads="$(wj_marker_field "$dir" loads)"
-  [ -n "$loads" ] || return 0
-  for tok in ${loads//,/ }; do
-    case "$_WJ_SEEN" in *"|$tok|"*) continue ;; esac
-    printf '%s\t%s\n' "$tag" "$tok"
-    _WJ_SEEN="$_WJ_SEEN$tok|"
-  done
+  [ -n "$loads" ] || { _WJ_SEEN="$4"; return 0; }
+  # shellcheck disable=SC2086 # intentional word-splitting of the loads list
+  wj_union_loads "$4" "$tag" ${loads//,/ }
+}
+
+# Union two comma/space lists into a "a, b, c" string, order-preserving, deduped.
+# Thin wrapper over wj_union_loads (bare tokens, then re-joined with commas).
+merge_loads() {
+  local tok out=""
+  # shellcheck disable=SC2086 # intentional word-splitting of both lists
+  while IFS= read -r tok; do
+    out="${out:+$out, }$tok"
+  done < <(wj_union_loads "|" "" ${1//,/ } ${2//,/ })
+  printf '%s' "$out"
 }
 
 # Ordered, deduped set of journal slugs to load for a session rooted at $1,
@@ -137,7 +167,7 @@ wj_rebuild_router() {
     for p in "$mem"/*/INDEX.md; do
       [ -e "$p" ] || continue
       d="$(basename "$(dirname "$p")")"
-      n="$(grep -c '^- ' "$p" 2>/dev/null || true)"; n="${n:-0}"
+      n="$(wj_entry_lines "$p" | grep -c '' 2>/dev/null || true)"; n="${n:-0}"
       printf -- '- %s (%s entries) — %s/INDEX.md\n' "$d" "$n" "$d"
     done
   } > "$mem/ROUTER.md"
