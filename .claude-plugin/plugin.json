@@ -1,6 +1,6 @@
 {
   "name": "work-journal",
   "description": "Per-project work journal. Recalls past task summaries at session start, distills each finished session into one dated markdown entry at session end. Plain .md files under ~/.claude/work-journal.",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "author": { "name": "7KiLL", "url": "https://github.com/7KiLL" }
 }

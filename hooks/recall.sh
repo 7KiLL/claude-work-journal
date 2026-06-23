@@ -40,7 +40,9 @@ while IFS="$(printf '\t')" read -r tag slug; do
   if [ "$tag" = self ]; then
     self="$slug"
     [ -f "$sidx" ] || continue
-    count="$(wj_entry_lines "$sidx" | grep -c '' 2>/dev/null || echo 0)"
+    # `|| true` (not `|| echo 0`): grep -c already prints 0 on no match, so a
+    # second echo would make count a two-line "0\n0" and break the -gt tests below.
+    count="$(wj_entry_lines "$sidx" | grep -c '' 2>/dev/null || true)"; count="${count:-0}"
     warn=""
     # ponytail: flat 150-entry threshold; raise/lower if it nags too early/late.
     [ "${count:-0}" -gt 150 ] && warn=" (this index has $count entries — consider trimming it)"

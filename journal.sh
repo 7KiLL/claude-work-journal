@@ -77,6 +77,9 @@ case "$cmd" in
     [ -n "$proj" ] || { echo "usage: trim <project> [N]"; exit 1; }
     dir="$MEM/$proj"; idx="$dir/INDEX.md"
     [ -f "$idx" ] || { echo "no such project: $proj"; exit 1; }
+    # Snapshot taken before the (slow) summarizer call below, then rewritten under
+    # flock. Known narrow race: a capture that appends an entry during the model
+    # call has its index line clobbered by this stale snapshot (the .md survives).
     lines=()
     while IFS= read -r l; do lines+=("$l"); done < <(wj_entry_lines "$idx")
     total=${#lines[@]}
