@@ -5,5 +5,5 @@ allowed-tools: Bash
 List the work-journal projects and report the output concisely. No extra commentary.
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/journal.sh" ls
+root="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"; [ -n "$root" ] && bash "$root/journal.sh" ls
 ```

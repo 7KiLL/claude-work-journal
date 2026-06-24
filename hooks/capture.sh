@@ -36,7 +36,7 @@ if [ "${1:-}" = "--worker" ]; then
   fi
 
   PROMPT=$(cat <<'EOF'
-You are distilling a finished Claude Code session into ONE work-journal entry.
+You are distilling a finished AI coding session into ONE work-journal entry.
 The session transcript (JSONL, noisy with tool calls) follows the marker below.
 
 If nothing durable was accomplished — only chat/questions, or an abandoned or

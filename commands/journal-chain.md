@@ -7,5 +7,5 @@ Show the recall chain for the given directory (default: cwd) and report the
 output concisely. No extra commentary.
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/journal.sh" chain $ARGUMENTS
+root="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"; [ -n "$root" ] && bash "$root/journal.sh" chain $ARGUMENTS
 ```

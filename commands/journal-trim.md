@@ -6,5 +6,5 @@ allowed-tools: Bash
 Trim the given project's journal and report the output concisely. No extra commentary.
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/journal.sh" trim $ARGUMENTS
+root="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"; [ -n "$root" ] && bash "$root/journal.sh" trim $ARGUMENTS
 ```

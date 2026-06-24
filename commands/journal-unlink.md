@@ -7,5 +7,5 @@ Remove the marker (or just one slug from its loads) and report the output
 concisely. No extra commentary.
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/journal.sh" unlink $ARGUMENTS
+root="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"; [ -n "$root" ] && bash "$root/journal.sh" unlink $ARGUMENTS
 ```

@@ -154,7 +154,7 @@ wj_summarize() {
     # ponytail: best-effort Codex fallback when claude is absent — lets the Codex
     # plugin work with no config. If your build's `codex exec` doesn't read the
     # prompt on stdin, set WORK_JOURNAL_SUMMARIZER. Failure is logged, never fatal.
-    WORK_JOURNAL_LOCK=1 codex exec
+    WORK_JOURNAL_LOCK=1 codex exec --model "$model"
   fi
 }
 

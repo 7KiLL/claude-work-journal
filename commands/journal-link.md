@@ -7,5 +7,5 @@ Create or update the directory's `.work-journal` marker and report the output
 concisely. `loads=` unions into any existing loads. No extra commentary.
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/journal.sh" link $ARGUMENTS
+root="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"; [ -n "$root" ] && bash "$root/journal.sh" link $ARGUMENTS
 ```

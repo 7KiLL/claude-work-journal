@@ -63,12 +63,14 @@ Restart the session so the hooks load. ✅
 Same repo, installs natively — Codex shares Claude Code's plugin & hook schema:
 
 ```
-codex plugin marketplace add 7KiLL/claude-work-journal
+codex plugin marketplace add 7KiLL/claude-work-journal --sparse .agents/plugins
+codex plugin add work-journal@claude-work-journal
 ```
 
-Then open `/plugins` in Codex and install **Work Journal**. Journals are shared
-across both tools (same store, same markers), so a project journaled in Claude
-Code shows up in Codex and vice-versa. 🤝
+Or open `/plugins` in Codex after adding the marketplace and install **Work
+Journal** there. Journals are shared across both tools (same store, same
+markers), so a project journaled in Claude Code shows up in Codex and vice-versa.
+🤝
 
 ---
 
@@ -174,7 +176,7 @@ All optional — sensible defaults out of the box.
 | Var | Default | Purpose |
 |-----|---------|---------|
 | `WORK_JOURNAL_DIR` | `~/.claude/work-journal` | where journals live |
-| `WORK_JOURNAL_MODEL` | `haiku` | model used to summarize sessions |
+| `WORK_JOURNAL_MODEL` | `haiku` | model used to summarize sessions (`claude -p --model` or `codex exec --model`) |
 | `WORK_JOURNAL_MAX_BYTES` | `200000` | max transcript bytes fed to the model (cost guard) |
 | `WORK_JOURNAL_QUIET` | unset | set to `1` to hide the session-start banner |
 | `WORK_JOURNAL_SUMMARIZER` | unset | a stdin-reading command to summarize with (e.g. `codex exec`); overrides the default |

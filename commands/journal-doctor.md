@@ -5,5 +5,5 @@ allowed-tools: Bash
 Run the work-journal doctor and report its output concisely. No extra commentary.
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/journal.sh" doctor
+root="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"; [ -n "$root" ] && bash "$root/journal.sh" doctor
 ```
