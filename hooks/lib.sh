@@ -39,6 +39,110 @@ wj_marker_field() {
   printf '%s' "$val"
 }
 
+# Single filesystem component, safe to append under $WORK_JOURNAL_DIR. This is
+# intentionally looser than explicit `slug:` validation so legacy journal folders
+# with spaces remain readable, but traversal and control characters are rejected.
+wj_valid_path_component() {
+  local s="${1:-}"
+  [ -n "$s" ] || return 1
+  case "$s" in */*|.|..) return 1 ;; esac
+  case "$s" in *[[:cntrl:]]*) return 1 ;; esac
+  return 0
+}
+
+# User-authored slugs and `loads:` tokens are stricter: portable, shell-friendly,
+# and bounded so they stay usable in slash commands and markdown links.
+wj_valid_slug() {
+  local s="${1:-}"
+  wj_valid_path_component "$s" || return 1
+  [[ "$s" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]
+}
+
+wj_valid_project() {
+  wj_valid_path_component "${1:-}"
+}
+
+wj_valid_slug_list() {
+  local tok list="${1:-}"
+  [ -n "$list" ] || return 0
+  # shellcheck disable=SC2086 # intentional splitting of comma/space slug lists
+  for tok in ${list//,/ }; do
+    wj_valid_slug "$tok" || return 1
+  done
+}
+
+wj_valid_root_value() {
+  case "${1:-}" in ""|true|yes|1|false|no|0) return 0 ;; *) return 1 ;; esac
+}
+
+wj_slugify_component() {
+  local s
+  s="$(printf '%s' "${1:-project}" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -cs 'a-z0-9._-' '-' | sed 's/^[^a-z0-9]*//; s/[^a-z0-9]*$//')"
+  [ -n "$s" ] || s="project"
+  printf '%s' "${s:0:80}"
+}
+
+wj_valid_entry_file() {
+  local f="${1:-}"
+  wj_valid_path_component "$f" || return 1
+  [[ "$f" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-[A-Za-z0-9._-]+\.md$ ]]
+}
+
+wj_entry_file_from_line() {
+  local line="${1:-}" f
+  f="${line#*](}"; f="${f%%)*}"
+  [ "$f" != "$line" ] || return 1
+  wj_valid_entry_file "$f" || return 1
+  printf '%s' "$f"
+}
+
+wj_valid_keep() {
+  local n="${1:-}"
+  case "$n" in ""|*[!0-9]*) return 1 ;; esac
+  [ "${#n}" -le 6 ]
+}
+
+wj_valid_cap() {
+  local n="${1:-}"
+  case "$n" in ""|*[!0-9]*) return 1 ;; esac
+  [ "${#n}" -le 9 ] && [ "$n" -gt 0 ]
+}
+
+wj_tmp_for() {
+  local target="$1" dir base
+  dir="$(dirname "$target")"; base="$(basename "$target")"
+  mktemp "$dir/.$base.tmp.XXXXXX"
+}
+
+# Run a command while holding the journal lock. Prefer flock when available; use
+# a mkdir lock directory otherwise so macOS and minimal systems keep serializing
+# writes instead of silently racing. Hooks still fail soft if the lock is stuck.
+wj_with_lock() {
+  local mem="$1" tries="${WORK_JOURNAL_LOCK_TRIES:-100}" delay="${WORK_JOURNAL_LOCK_DELAY:-0.1}"
+  shift
+  mkdir -p "$mem" 2>/dev/null || return 1
+  if command -v flock >/dev/null 2>&1; then
+    (
+      local i=0
+      while ! flock -n 9 2>/dev/null; do
+        i=$((i+1)); [ "$i" -ge "$tries" ] && exit 1
+        sleep "$delay"
+      done
+      "$@"
+    ) 9>"$mem/.lock"
+  else
+    (
+      local lockdir="$mem/.lock.d" i=0
+      while ! mkdir "$lockdir" 2>/dev/null; do
+        i=$((i+1)); [ "$i" -ge "$tries" ] && exit 1
+        sleep "$delay"
+      done
+      trap 'rmdir "$lockdir" 2>/dev/null || true' EXIT HUP INT TERM
+      "$@"
+    )
+  fi
+}
+
 # Print only real entry lines (`- [YYYY-MM-DD slug](file) — hook`) from $1,
 # dropping the `- [archive]` row and any other `- [` lines. Centralized so
 # trim/mv/ls/recall/router all agree on what counts as an entry: the link text
@@ -52,13 +156,22 @@ wj_entry_lines() {
 # collision (a *different* repo that already owns the base name).
 wj_resolve_slug() {
   local root="$1" mem="$2"
-  local base id d i s
+  local base id d i s src
   # A marker's explicit `slug:` wins outright — the user owns that name, so no
   # collision suffix and no .source dance.
   s="$(wj_marker_field "$root" slug)"
-  [ -n "$s" ] && { printf '%s' "$s"; return 0; }
-  base="$(basename "$root")"
+  [ -n "$s" ] && wj_valid_slug "$s" && { printf '%s' "$s"; return 0; }
   id="$(wj_source_id "$root")"
+  # 0) reuse any folder that already records this exact id, including legacy
+  # names that predate today's slug rules.
+  for src in "$mem"/*/.source; do
+    [ -f "$src" ] || continue
+    [ "$(cat "$src" 2>/dev/null)" = "$id" ] || continue
+    d="$(basename "$(dirname "$src")")"
+    wj_valid_path_component "$d" && { printf '%s' "$d"; return 0; }
+  done
+  base="$(basename "$root")"
+  wj_valid_path_component "$base" || base="$(wj_slugify_component "$base")"
   # 1) reuse a folder that already records this exact id
   for d in "$mem/$base" "$mem/$base"-*; do
     [ -d "$d" ] || continue
@@ -75,6 +188,58 @@ wj_resolve_slug() {
   printf '%s' "$base-$i"
 }
 
+wj_write_source_locked() {
+  local dir="$1" id="$2" tmp
+  [ -f "$dir/.source" ] && return 0
+  tmp="$(wj_tmp_for "$dir/.source")" || return 1
+  printf '%s\n' "$id" > "$tmp" && mv -f "$tmp" "$dir/.source" || {
+    rm -f "$tmp"
+    return 1
+  }
+}
+
+# Resolve and claim the slug for a writer. Call only from inside wj_with_lock.
+wj_claim_slug_locked() {
+  local root="$1" mem="$2"
+  local s base id d i src
+  s="$(wj_marker_field "$root" slug)"
+  id="$(wj_source_id "$root")"
+  if [ -n "$s" ] && wj_valid_slug "$s"; then
+    mkdir -p "$mem/$s" 2>/dev/null || return 1
+    wj_write_source_locked "$mem/$s" "$id" || true
+    printf '%s' "$s"
+    return 0
+  fi
+  for src in "$mem"/*/.source; do
+    [ -f "$src" ] || continue
+    [ "$(cat "$src" 2>/dev/null)" = "$id" ] || continue
+    d="$(basename "$(dirname "$src")")"
+    wj_valid_path_component "$d" && { printf '%s' "$d"; return 0; }
+  done
+  base="$(basename "$root")"
+  wj_valid_path_component "$base" || base="$(wj_slugify_component "$base")"
+  if [ -d "$mem/$base" ] && [ ! -f "$mem/$base/.source" ]; then
+    wj_write_source_locked "$mem/$base" "$id" || return 1
+    printf '%s' "$base"
+    return 0
+  fi
+  s="$base"; i=2
+  while :; do
+    d="$mem/$s"
+    if [ ! -d "$d" ]; then
+      mkdir "$d" 2>/dev/null || { s="$base-$i"; i=$((i+1)); continue; }
+      wj_write_source_locked "$d" "$id" || return 1
+      printf '%s' "$s"
+      return 0
+    fi
+    if [ -f "$d/.source" ] && [ "$(cat "$d/.source" 2>/dev/null)" = "$id" ]; then
+      printf '%s' "$s"
+      return 0
+    fi
+    s="$base-$i"; i=$((i+1))
+  done
+}
+
 # Order-preserving union of the tokens in args $3.. against the seen-set value
 # in $1. Prints each newly-seen token — prefixed with `$2\t` when $2 is non-empty
 # (so callers can tag them), bare otherwise — and threads the updated set out via
@@ -84,6 +249,7 @@ wj_union_loads() {
   _WJ_SEEN="$1"; local tag="$2" tok
   for tok in "${@:3}"; do
     [ -n "$tok" ] || continue
+    wj_valid_slug "$tok" || continue
     case "$_WJ_SEEN" in *"|$tok|"*) continue ;; esac
     if [ -n "$tag" ]; then printf '%s\t%s\n' "$tag" "$tok"; else printf '%s\n' "$tok"; fi
     _WJ_SEEN="$_WJ_SEEN$tok|"
@@ -123,6 +289,8 @@ wj_recall_chain() {
   printf 'self\t%s\n' "$self"
   seen="|$self|"
   _wj_loads "$root" "$mem" link "$seen"; seen="$_WJ_SEEN"
+  stop="$(wj_marker_field "$root" root)"
+  case "$stop" in true|yes|1) return 0 ;; esac
   d="$(dirname "$root")"
   while [ -n "$d" ] && [ "$d" != "/" ]; do
     if [ -f "$d/.work-journal" ]; then
@@ -161,8 +329,9 @@ wj_summarize() {
 # Rebuild the top-level ROUTER.md from disk under journal dir $1 — always
 # consistent, no incremental diff logic.
 wj_rebuild_router() {
-  local mem="$1" p d n
+  local mem="$1" p d n tmp
   [ -d "$mem" ] || return 0
+  tmp="$(wj_tmp_for "$mem/ROUTER.md")" || return 1
   { printf '# Work journal — projects\n\n'
     for p in "$mem"/*/INDEX.md; do
       [ -e "$p" ] || continue
@@ -170,5 +339,8 @@ wj_rebuild_router() {
       n="$(wj_entry_lines "$p" | grep -c '' 2>/dev/null || true)"; n="${n:-0}"
       printf -- '- %s (%s entries) — %s/INDEX.md\n' "$d" "$n" "$d"
     done
-  } > "$mem/ROUTER.md"
+  } > "$tmp" && mv -f "$tmp" "$mem/ROUTER.md" || {
+    rm -f "$tmp"
+    return 1
+  }
 }

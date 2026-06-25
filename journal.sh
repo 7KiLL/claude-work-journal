@@ -24,9 +24,144 @@ EOF
 # (Re)write $1/.work-journal from slug/root/loads ($2/$3/$4); empty fields drop out.
 write_marker() {
   local f="$1/.work-journal"
+  local tmp
+  tmp="$(wj_tmp_for "$f")" || return 1
   { [ -n "$2" ] && printf 'slug: %s\n' "$2"
     [ -n "$3" ] && printf 'root: %s\n' "$3"
-    [ -n "$4" ] && printf 'loads: %s\n' "$4"; } > "$f"
+    [ -n "$4" ] && printf 'loads: %s\n' "$4"
+    true; } > "$tmp" && mv -f "$tmp" "$f" || {
+    rm -f "$tmp"
+    return 1
+  }
+}
+
+oldfile_contains() {
+  local want="$1" f
+  for f in "${oldfiles[@]}"; do
+    [ "$f" = "$want" ] && return 0
+  done
+  return 1
+}
+
+trim_commit() {
+  local l f present=0 removed=0 arch arch_tmp idx_tmp
+  [ -f "$idx" ] || { echo "no such project: $proj"; return 1; }
+  while IFS= read -r l; do
+    f="$(wj_entry_file_from_line "$l")" || continue
+    oldfile_contains "$f" && { present=1; break; }
+  done < <(wj_entry_lines "$idx")
+  [ "$present" = 1 ] || { echo "entries already trimmed; nothing to update"; return 0; }
+
+  arch="$dir/archive.md"
+  arch_tmp="$(wj_tmp_for "$arch")" || return 1
+  { [ -f "$arch" ] && cat "$arch"; printf '\n## Trimmed %s (%d entries)\n\n%s\n' "$(date +%F)" "${#oldfiles[@]}" "$summary"; } > "$arch_tmp" && mv -f "$arch_tmp" "$arch" || {
+    rm -f "$arch_tmp"
+    return 1
+  }
+
+  for f in "${oldfiles[@]}"; do
+    [ -f "$dir/$f" ] || continue
+    rm -f "$dir/$f" && removed=$((removed+1))
+  done
+
+  idx_tmp="$(wj_tmp_for "$idx")" || return 1
+  {
+    head -n 2 "$idx"
+    while IFS= read -r l; do
+      f="$(wj_entry_file_from_line "$l")" || continue
+      oldfile_contains "$f" && continue
+      printf '%s\n' "$l"
+    done < <(wj_entry_lines "$idx")
+    printf -- '- [archive](archive.md) — older entries, summarized\n'
+  } > "$idx_tmp" && mv -f "$idx_tmp" "$idx" || {
+    rm -f "$idx_tmp"
+    return 1
+  }
+  wj_rebuild_router "$MEM" || true
+  echo "trimmed $removed entries into archive.md; kept target $keep newest"
+}
+
+mv_lookup() {
+  local want="$1" i
+  i=0
+  while [ "$i" -lt "${#renamed_from[@]}" ]; do
+    [ "${renamed_from[$i]}" = "$want" ] && { printf '%s' "${renamed_to[$i]}"; return 0; }
+    i=$((i+1))
+  done
+  printf '%s' "$want"
+}
+
+mv_commit() {
+  local header f bn base n newbn src_arch dst_arch arch_tmp entries_tmp idx_tmp l tgt newtgt seen
+  [ -d "$src" ] || { echo "no such project: $from"; return 1; }
+  if [ ! -d "$dst" ]; then
+    mv "$src" "$dst" || return 1
+    wj_rebuild_router "$MEM" || true
+    echo "renamed $from -> $to"
+    return 0
+  fi
+
+  renamed_from=(); renamed_to=()
+  for f in "$src"/*.md; do
+    [ -e "$f" ] || continue
+    bn="$(basename "$f")"
+    case "$bn" in INDEX.md|archive.md) continue ;; esac
+    wj_valid_path_component "$bn" || continue
+    if [ ! -e "$dst/$bn" ]; then
+      mv "$f" "$dst/$bn" || return 1
+    else
+      base="${bn%.md}"; n=2
+      while [ -e "$dst/$base-$n.md" ]; do n=$((n+1)); done
+      newbn="$base-$n.md"
+      mv "$f" "$dst/$newbn" || return 1
+      renamed_from+=("$bn"); renamed_to+=("$newbn")
+    fi
+  done
+
+  src_arch="$src/archive.md"; dst_arch="$dst/archive.md"
+  if [ -f "$src_arch" ]; then
+    arch_tmp="$(wj_tmp_for "$dst_arch")" || return 1
+    { [ -f "$dst_arch" ] && cat "$dst_arch"; cat "$src_arch"; } > "$arch_tmp" && mv -f "$arch_tmp" "$dst_arch" || {
+      rm -f "$arch_tmp"
+      return 1
+    }
+  fi
+
+  header="$(head -n 1 "$dst/INDEX.md" 2>/dev/null || echo "# $to — work journal")"
+  entries_tmp="$(wj_tmp_for "$dst/INDEX.entries")" || return 1
+  {
+    wj_entry_lines "$dst/INDEX.md"
+    wj_entry_lines "$src/INDEX.md" | while IFS= read -r l; do
+      tgt="$(wj_entry_file_from_line "$l")" || continue
+      newtgt="$(mv_lookup "$tgt")"
+      if [ "$newtgt" != "$tgt" ]; then
+        printf '%s\n' "${l/($tgt)/($newtgt)}"
+      else
+        printf '%s\n' "$l"
+      fi
+    done
+  } | sort -r > "$entries_tmp"
+
+  idx_tmp="$(wj_tmp_for "$dst/INDEX.md")" || { rm -f "$entries_tmp"; return 1; }
+  {
+    printf '%s\n\n' "$header"
+    seen="|"
+    while IFS= read -r l; do
+      tgt="$(wj_entry_file_from_line "$l")" || continue
+      case "$seen" in *"|$tgt|"*) continue ;; esac
+      printf '%s\n' "$l"
+      seen="$seen$tgt|"
+    done < "$entries_tmp"
+    [ -f "$dst_arch" ] && printf -- '- [archive](archive.md) — older entries, summarized\n'
+    true
+  } > "$idx_tmp" && mv -f "$idx_tmp" "$dst/INDEX.md" || {
+    rm -f "$idx_tmp" "$entries_tmp"
+    return 1
+  }
+  rm -f "$entries_tmp"
+  rm -rf "$src"
+  wj_rebuild_router "$MEM" || true
+  echo "merged $from into $to"
 }
 
 cmd="${1:-}"; [ $# -gt 0 ] && shift
@@ -34,6 +169,12 @@ cmd="${1:-}"; [ $# -gt 0 ] && shift
 case "$cmd" in
   doctor)
     echo "journal dir: $MEM"
+    echo "bash:        ${BASH_VERSION:-unknown}"
+    if command -v flock >/dev/null 2>&1; then
+      echo "lock:        flock"
+    else
+      echo "lock:        mkdir fallback (flock not found)"
+    fi
     deps="jq git"
     if [ -n "${WORK_JOURNAL_SUMMARIZER:-}" ]; then
       echo "summarizer:  $WORK_JOURNAL_SUMMARIZER (custom)"
@@ -75,19 +216,23 @@ case "$cmd" in
   trim)
     proj="${1:-}"; keep="${2:-30}"
     [ -n "$proj" ] || { echo "usage: trim <project> [N]"; exit 1; }
+    wj_valid_project "$proj" || { echo "invalid project name: $proj"; exit 1; }
+    wj_valid_keep "$keep" || { echo "invalid keep count: $keep"; exit 1; }
     dir="$MEM/$proj"; idx="$dir/INDEX.md"
     [ -f "$idx" ] || { echo "no such project: $proj"; exit 1; }
-    # Snapshot taken before the (slow) summarizer call below, then rewritten under
-    # flock. Known narrow race: a capture that appends an entry during the model
-    # call has its index line clobbered by this stale snapshot (the .md survives).
+    # Snapshot only selects files to summarize. The final mutation re-reads the
+    # index under lock so captures that land during the model call are preserved.
     lines=()
     while IFS= read -r l; do lines+=("$l"); done < <(wj_entry_lines "$idx")
     total=${#lines[@]}
     [ "$total" -gt "$keep" ] || { echo "$total entries; nothing to trim (keep=$keep)"; exit 0; }
-    keeplines=( "${lines[@]:0:$keep}" )
     oldlines=( "${lines[@]:$keep}" )
     oldfiles=()
-    for l in "${oldlines[@]}"; do f="${l#*](}"; f="${f%%)*}"; oldfiles+=("$f"); done
+    for l in "${oldlines[@]}"; do
+      f="$(wj_entry_file_from_line "$l")" || continue
+      oldfiles+=("$f")
+    done
+    [ "${#oldfiles[@]}" -gt 0 ] || { echo "no safe entry files to trim"; exit 0; }
 
     catf="$(mktemp)"
     for f in "${oldfiles[@]}"; do
@@ -98,92 +243,43 @@ case "$cmd" in
     rm -f "$catf"
     [ -n "$summary" ] || summary="(digest unavailable — ${#oldfiles[@]} entries archived without summary)"
 
-    arch="$dir/archive.md"
-    { [ -f "$arch" ] && cat "$arch"; printf '\n## Trimmed %s (%d entries)\n\n%s\n' "$(date +%F)" "${#oldfiles[@]}" "$summary"; } > "$arch.tmp" && mv "$arch.tmp" "$arch"
-    for f in "${oldfiles[@]}"; do rm -f "$dir/$f"; done
-    # Serialize the index/router rewrite against parallel capture sessions. wj_entry_lines
-    # already dropped any stale `- [archive]` row, so we append exactly one fresh one.
-    {
-      flock 9 2>/dev/null || true
-      tmp="$(mktemp)"
-      { head -n 2 "$idx"; printf '%s\n' "${keeplines[@]}"; printf -- '- [archive](archive.md) — older entries, summarized\n'; } > "$tmp"
-      mv "$tmp" "$idx"
-      wj_rebuild_router "$MEM"
-    } 9>"$MEM/.lock"
-    echo "trimmed ${#oldfiles[@]} entries into archive.md; kept $keep newest"
+    wj_with_lock "$MEM" trim_commit || { echo "journal update failed"; exit 1; }
     ;;
 
   mv)
     from="${1:-}"; to="${2:-}"
     { [ -n "$from" ] && [ -n "$to" ]; } || { echo "usage: mv <from> <to>"; exit 1; }
+    wj_valid_project "$from" || { echo "invalid source project name: $from"; exit 1; }
+    wj_valid_project "$to" || { echo "invalid destination project name: $to"; exit 1; }
+    [ "$from" != "$to" ] || { echo "source and destination are the same"; exit 0; }
     src="$MEM/$from"; dst="$MEM/$to"
-    [ -d "$src" ] || { echo "no such project: $from"; exit 1; }
-    if [ ! -d "$dst" ]; then
-      mv "$src" "$dst"
-      { flock 9 2>/dev/null || true; wj_rebuild_router "$MEM"; } 9>"$MEM/.lock"
-      echo "renamed $from -> $to"
-    else
-      # Move entry files; rename on collision (<base>-2.md, -3.md …) so no entry
-      # is silently dropped. Track renames to fix up index link targets below.
-      declare -A renamed=()
-      for f in "$src"/*.md; do
-        [ -e "$f" ] || continue
-        bn="$(basename "$f")"
-        case "$bn" in INDEX.md|archive.md) continue ;; esac
-        if [ ! -e "$dst/$bn" ]; then
-          mv "$f" "$dst/$bn"
-        else
-          base="${bn%.md}"; n=2
-          while [ -e "$dst/$base-$n.md" ]; do n=$((n+1)); done
-          newbn="$base-$n.md"
-          mv "$f" "$dst/$newbn"
-          renamed["$bn"]="$newbn"
-        fi
-      done
-      [ -f "$src/archive.md" ] && cat "$src/archive.md" >> "$dst/archive.md"
-      # Serialize the index/router rewrite against parallel capture sessions.
-      {
-        flock 9 2>/dev/null || true
-        header="$(head -n 1 "$dst/INDEX.md" 2>/dev/null || echo "# $to — work journal")"
-        tmp="$(mktemp)"
-        # Merge entry lines (archive rows excluded by wj_entry_lines). Rewrite the
-        # link target of any src line whose file was renamed, then dedup by link
-        # target so same-text different-file entries survive while true dupes fold.
-        {
-          wj_entry_lines "$dst/INDEX.md"
-          wj_entry_lines "$src/INDEX.md" | while IFS= read -r l; do
-            tgt="${l#*](}"; tgt="${tgt%%)*}"
-            if [ -n "${renamed[$tgt]+x}" ]; then
-              pre="${l%%\]*}]"; rest="${l#*\]}"; rest="${rest#*\)}"
-              printf '%s\n' "${pre}(${renamed[$tgt]})${rest}"
-            else
-              printf '%s\n' "$l"
-            fi
-          done
-        } | sort -r | awk 'match($0,/\]\([^)]*\)/){t=substr($0,RSTART+2,RLENGTH-3); if(!seen[t]++) print $0}' >> "$tmp"
-        { printf '%s\n\n' "$header"; cat "$tmp"; } > "$dst/INDEX.md"
-        rm -f "$tmp"
-        rm -rf "$src"
-        wj_rebuild_router "$MEM"
-      } 9>"$MEM/.lock"
-      echo "merged $from into $to"
-    fi
+    wj_with_lock "$MEM" mv_commit || { echo "journal update failed"; exit 1; }
     ;;
 
   link)
     dir="${1:-}"; [ $# -gt 0 ] && shift
     [ -n "$dir" ] || { echo "usage: link <dir> [slug=NAME] [root=true] [loads=a,b]"; exit 1; }
     [ -d "$dir" ] || { echo "no such directory: $dir"; exit 1; }
-    s="$(wj_marker_field "$dir" slug)"; r="$(wj_marker_field "$dir" root)"; l="$(wj_marker_field "$dir" loads)"
+    s="$(wj_marker_field "$dir" slug)"; wj_valid_slug "$s" || s=""
+    r="$(wj_marker_field "$dir" root)"; wj_valid_root_value "$r" || r=""
+    l="$(merge_loads "" "$(wj_marker_field "$dir" loads)")"
     for kv in "$@"; do
       case "$kv" in
-        slug=*)  s="${kv#slug=}" ;;
-        root=*)  r="${kv#root=}" ;;
-        loads=*) l="$(merge_loads "$l" "${kv#loads=}")" ;;   # link = add a connection → union
+        slug=*)
+          s="${kv#slug=}"
+          [ -z "$s" ] || wj_valid_slug "$s" || { echo "invalid slug: $s"; exit 1; }
+          ;;
+        root=*)
+          r="${kv#root=}"
+          wj_valid_root_value "$r" || { echo "invalid root value: $r"; exit 1; }
+          ;;
+        loads=*)
+          wj_valid_slug_list "${kv#loads=}" || { echo "invalid loads list: ${kv#loads=}"; exit 1; }
+          l="$(merge_loads "$l" "${kv#loads=}")" ;;   # link = add a connection → union
         *) echo "unknown field: $kv (want slug=, root=, or loads=)"; exit 1 ;;
       esac
     done
-    write_marker "$dir" "$s" "$r" "$l"
+    write_marker "$dir" "$s" "$r" "$l" || { echo "could not write $dir/.work-journal"; exit 1; }
     if [ -s "$dir/.work-journal" ]; then echo "wrote $dir/.work-journal:"; sed 's/^/  /' "$dir/.work-journal"
     else echo "marked $dir (empty marker — node named '$(basename "$dir")')"; fi
     ;;
@@ -191,15 +287,17 @@ case "$cmd" in
   unlink)
     dir="${1:-}"; rm_slug="${2:-}"
     [ -n "$dir" ] || { echo "usage: unlink <dir> [slug]"; exit 1; }
+    [ -z "$rm_slug" ] || wj_valid_slug "$rm_slug" || { echo "invalid slug: $rm_slug"; exit 1; }
     f="$dir/.work-journal"
     [ -f "$f" ] || { echo "no marker at $dir"; exit 0; }
     if [ -z "$rm_slug" ]; then
       rm -f "$f"; echo "removed marker $f"
     else
-      s="$(wj_marker_field "$dir" slug)"; r="$(wj_marker_field "$dir" root)"
+      s="$(wj_marker_field "$dir" slug)"; wj_valid_slug "$s" || s=""
+      r="$(wj_marker_field "$dir" root)"; wj_valid_root_value "$r" || r=""
       new=""; for tok in $(wj_marker_field "$dir" loads | tr ',' ' '); do
         [ "$tok" = "$rm_slug" ] && continue; new="$(merge_loads "$new" "$tok")"; done
-      write_marker "$dir" "$s" "$r" "$new"
+      write_marker "$dir" "$s" "$r" "$new" || { echo "could not write $f"; exit 1; }
       echo "removed '$rm_slug' from loads in $f"
     fi
     ;;
