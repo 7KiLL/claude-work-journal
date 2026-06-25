@@ -4,7 +4,7 @@
   "plugins": [
     {
       "name": "work-journal",
-      "description": "Per-project work journal via SessionStart/Stop hooks.",
+      "description": "Per-project work journal via SessionStart/Stop hooks. Stores local markdown and summarizes with the configured CLI.",
       "source": {
         "path": "./plugins/work-journal"
       },

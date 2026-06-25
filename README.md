@@ -9,7 +9,7 @@ of every session — *"wait, what was I doing here last time?"*
 - 🟢 **Session start** → injects this project's past task summaries into context, so your agent already knows the history.
 - 🔴 **Session end** → distills the finished session into one dated `.md` entry (or skips it if nothing durable happened).
 
-No database. No cloud. Just `.md` files under `~/.claude/work-journal/` — grep-able, git-able, yours.
+No database. Journals are plain `.md` files under `~/.claude/work-journal/` — grep-able, git-able, yours. Session summaries are produced by your configured summarizer (`claude`, `codex`, or `WORK_JOURNAL_SUMMARIZER`).
 
 ---
 
@@ -34,6 +34,7 @@ When you wrap up, a session becomes one tidy entry — written for you, automati
 
 ```markdown
 ---
+session: abc123
 task: Fix auth token refresh race
 status: done
 files: auth/refresh.ts, auth/middleware.ts
@@ -92,7 +93,7 @@ slug-per-worktree that orphans itself when the worktree is deleted.
 ```
 
 - **Recall** reads `<project>/INDEX.md` and hands it to your agent as context. New project? Stays silent.
-- **Capture** returns instantly and runs **detached** — it never blocks or hangs your exit. The background worker pipes the transcript to a cheap headless model, which replies `SKIP` or a single entry, then writes the file and updates the index.
+- **Capture** returns instantly and runs **detached** — it never blocks or hangs your exit. The background worker pipes the transcript tail to the configured summarizer, which replies `SKIP` or a single entry, then writes the file and updates the index.
 
 ---
 
@@ -104,9 +105,9 @@ folder of microservices, a backend that leans on a frontend. Drop a
 
 ```
 # ~/RiderProjects/.work-journal   (a folder-of-repos, not itself a repo)
-slug: rider           # 🏷️  name the journal      (default: the dir name)
+slug: rider           # 🏷️  name the journal      (safe token: letters/numbers/._-)
 root: true            # ⛔  stop walking up here   (don't ascend to ~)
-loads: fe             # 🔌  also pull these journals by slug (one hop)
+loads: fe             # 🔌  also pull these safe-token journals by slug (one hop)
 ```
 
 Now identity follows the **tree**, not the disk:
@@ -155,6 +156,8 @@ Manage markers with the CLI (or just ask your agent — there's no schema):
 | ✖️ `unlink <dir> [slug]` | remove the marker, or just one slug from its `loads` |
 | 🔍 `chain [dir]` | preview what recall would load (self + ancestors + loads) |
 
+Safety rules: project arguments must be one journal directory component, not a path; explicit `slug=` and `loads=` tokens must match letters/numbers/`._-`; `trim [N]` must be a non-negative integer. `trim` only archives plugin-managed `YYYY-MM-DD-*.md` entry links.
+
 ---
 
 ## 🛟 Fail-safe by design
@@ -164,8 +167,16 @@ The whole point is to help quietly — so it's built to **never get in your way*
 - 🧯 **Never blocks, never crashes.** Capture is detached; your session exits instantly and the summary lands a few seconds later.
 - 🔁 **Idempotent per session.** Each entry carries its `session:` id, so a hook firing twice (compact, then exit) won't duplicate.
 - 🤫 **Errors whisper, they don't shout.** A failed capture logs one line to `.errors.log`; the **next** session start surfaces a single "logged N issue(s)" notice and rotates it. You find out without ever being interrupted mid-work.
-- 🔒 **Parallel-safe.** Index/router writes are `flock`-guarded so concurrent sessions can't clobber each other.
+- 🔒 **Parallel-safe.** Index/router writes use `flock` when available, with a `mkdir` lock fallback for systems that do not ship `flock`.
 - 🪶 **Bounded cost.** Only the transcript tail (`WORK_JOURNAL_MAX_BYTES`) is summarized, by a cheap model.
+
+---
+
+## 🔐 Privacy
+
+Journal storage is local markdown under `WORK_JOURNAL_DIR`. Capture and `trim` still send transcript or journal text to the configured summarizer, which may be a hosted provider depending on your `claude`, `codex`, or custom command setup. Set `WORK_JOURNAL_SUMMARIZER` to a local stdin-reading command if transcript processing must stay local.
+
+Recalled journal entries are injected as historical context, not instructions. The hooks also tell the summarizer to treat transcripts as untrusted data and redact obvious secrets, but that is a guardrail, not a sandbox.
 
 ---
 
@@ -177,14 +188,18 @@ All optional — sensible defaults out of the box.
 |-----|---------|---------|
 | `WORK_JOURNAL_DIR` | `~/.claude/work-journal` | where journals live |
 | `WORK_JOURNAL_MODEL` | `haiku` | model used to summarize sessions (`claude -p --model` or `codex exec --model`) |
-| `WORK_JOURNAL_MAX_BYTES` | `200000` | max transcript bytes fed to the model (cost guard) |
+| `WORK_JOURNAL_MAX_BYTES` | `200000` | max transcript bytes fed to the model (positive integer; invalid values fall back to default) |
 | `WORK_JOURNAL_QUIET` | unset | set to `1` to hide the session-start banner |
 | `WORK_JOURNAL_SUMMARIZER` | unset | a stdin-reading command to summarize with (e.g. `codex exec`); overrides the default |
 | `CLAUDE_BIN` | `claude` | path to the Claude CLI if it's not on `PATH` |
 
-**Requirements:** `jq`, `git`, and a summarizer — `claude` by default, falling
-back to `codex`, or anything you point `WORK_JOURNAL_SUMMARIZER` at. If `jq` or
-every summarizer is missing, the hooks simply no-op and log it. 🪶
+**Requirements:** Bash 3+, `jq`, `git`, standard Unix tools, and a summarizer — `claude` by default, falling back to `codex`, or anything you point `WORK_JOURNAL_SUMMARIZER` at. If `jq` or every summarizer is missing, the hooks simply no-op and log it. `flock` is used when present; otherwise a portable lock-directory fallback is used.
+
+Validate a checkout with:
+
+```bash
+bash scripts/validate.sh
+```
 
 ---
 

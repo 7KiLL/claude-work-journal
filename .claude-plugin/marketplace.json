@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "claude-work-journal",
-  "description": "Per-project work journal for Claude Code — recalls past task summaries at session start, writes one at session end.",
+  "description": "Per-project work journal for Claude Code — stores local markdown, recalls prior summaries at session start, writes one via the configured summarizer at session end.",
   "owner": {
     "name": "7KiLL",
     "url": "https://github.com/7KiLL"
