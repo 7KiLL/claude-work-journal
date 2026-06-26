@@ -2,7 +2,7 @@
 
 > **Your AI forgets every session. This remembers.**
 
-A plugin for **Claude Code** (and **Codex**) that keeps a **per-project work
+A plugin for **Claude Code**, **Codex**, and **Kilo/OpenCode-compatible** harnesses that keeps a **per-project work
 journal** in plain markdown. It quietly answers the question you hit at the start
 of every session — *"wait, what was I doing here last time?"*
 
@@ -35,6 +35,7 @@ When you wrap up, a session becomes one tidy entry — written for you, automati
 ```markdown
 ---
 session: abc123
+capture: abc123:915816924:2048
 task: Fix auth token refresh race
 status: done
 files: auth/refresh.ts, auth/middleware.ts
@@ -73,6 +74,59 @@ Journal** there. Journals are shared across both tools (same store, same
 markers), so a project journaled in Claude Code shows up in Codex and vice-versa.
 🤝
 
+### Kilo
+
+Kilo does not use the Claude/Codex hook JSON manifest. Instead, load the JS
+adapter from `kilo-plugin/work-journal.js` through Kilo's plugin config:
+
+```jsonc
+{
+  "plugin": ["file:///absolute/path/to/claude-work-journal/kilo-plugin/work-journal.js"]
+}
+```
+
+You can put that in a project `kilo.jsonc`, `.kilo/kilo.jsonc`, or your global
+`~/.config/kilo/kilo.jsonc`. The adapter uses Kilo's `experimental.chat.system.transform`
+hook for recall and `session.idle`/`session.turn.close` events for capture. Since
+Kilo has no single `SessionEnd` hook, capture is debounced after idle turns and
+also flushed when the plugin is disposed.
+
+For a local checkout, this helper creates a missing Kilo config file without
+trying to merge existing JSONC:
+
+```bash
+bash scripts/install.sh kilo --project /path/to/project
+bash scripts/install.sh kilo --global
+```
+
+### OpenCode
+
+Standalone OpenCode loads local plugins from `.opencode/plugins/` or
+`~/.config/opencode/plugins/`, not from Kilo's `file://` plugin config. Use the
+installer to create a tiny wrapper that exports the shared adapter:
+
+```bash
+bash scripts/install.sh opencode --project /path/to/project
+bash scripts/install.sh opencode --global
+```
+
+OpenCode support uses the same bash capture core and the same resumable
+`session:`/`capture:` metadata. Capture listens for OpenCode's documented
+`session.idle` event. Recall uses OpenCode's documented no-reply session prompt
+API as a best-effort context injection path; Kilo continues to use its
+`experimental.chat.system.transform` system hook.
+
+Optional Kilo plugin options:
+
+```jsonc
+{
+  "plugin": [[
+    "file:///absolute/path/to/claude-work-journal/kilo-plugin/work-journal.js",
+    { "captureDelayMs": 30000, "maxMessages": 200 }
+  ]]
+}
+```
+
 ---
 
 ## 🧠 How it works
@@ -88,12 +142,13 @@ slug-per-worktree that orphans itself when the worktree is deleted.
 ├── ROUTER.md                        # 🗺️  auto-rebuilt map of every project
 └── this-is-fine-bot/
     ├── INDEX.md                     # 📑  one line per entry, newest first → injected at start
-    ├── 2026-06-21-fix-auth-race.md  # 📝  one session = one entry
+    ├── 2026-06-21-fix-auth-race.md  # 📝  one session = one maintained entry
     └── 2026-06-19-add-rate-limit.md
 ```
 
 - **Recall** reads `<project>/INDEX.md` and hands it to your agent as context. New project? Stays silent.
-- **Capture** returns instantly and runs **detached** — it never blocks or hangs your exit. The background worker pipes the transcript tail to the configured summarizer, which replies `SKIP` or a single entry, then writes the file and updates the index.
+- **Capture** returns instantly and runs **detached** — it never blocks or hangs your exit. The dispatcher snapshots the transcript tail, then the background worker pipes that immutable snapshot to the configured summarizer, which replies `SKIP` or a single entry, then writes the file and updates the index. Kilo/OpenCode capture is per settled turn because those harnesses expose idle events rather than a final SessionEnd event.
+- **Resume-safe entries** use `session:` to find the entry to replace and `capture:` to skip exact duplicate closes. If you resume a session, do more work, and close again, the existing session entry is revised instead of creating overlapping duplicates or dropping the later work.
 
 ---
 
@@ -148,7 +203,7 @@ Manage markers with the CLI (or just ask your agent — there's no schema):
 
 | Command | Does |
 |---------|------|
-| 🩺 `doctor` | dependency check, project count, recent errors |
+| 🩺 `doctor [--strict]` | dependency, PATH, permission, harness-file, project-count, and recent-error diagnostics |
 | 📂 `ls` | list projects and entry counts |
 | ✂️ `trim <project> [N]` | keep the newest N entries (default 30); summarize the rest into `archive.md` |
 | 🔀 `mv <from> <to>` | rename a project's journal, or merge it into another |
@@ -165,7 +220,7 @@ Safety rules: project arguments must be one journal directory component, not a p
 The whole point is to help quietly — so it's built to **never get in your way**:
 
 - 🧯 **Never blocks, never crashes.** Capture is detached; your session exits instantly and the summary lands a few seconds later.
-- 🔁 **Idempotent per session.** Each entry carries its `session:` id, so a hook firing twice (compact, then exit) won't duplicate.
+- 🔁 **Idempotent and resume-aware.** Each entry carries `session:` and `capture:` metadata. Duplicate captures with the same capture key are skipped; later captures for the same resumed session replace the same entry and refresh the index line.
 - 🤫 **Errors whisper, they don't shout.** A failed capture logs one line to `.errors.log`; the **next** session start surfaces a single "logged N issue(s)" notice and rotates it. You find out without ever being interrupted mid-work.
 - 🔒 **Parallel-safe.** Index/router writes use `flock` when available, with a `mkdir` lock fallback for systems that do not ship `flock`.
 - 🪶 **Bounded cost.** Only the transcript tail (`WORK_JOURNAL_MAX_BYTES`) is summarized, by a cheap model.
@@ -187,18 +242,23 @@ All optional — sensible defaults out of the box.
 | Var | Default | Purpose |
 |-----|---------|---------|
 | `WORK_JOURNAL_DIR` | `~/.claude/work-journal` | where journals live |
-| `WORK_JOURNAL_MODEL` | `haiku` | model used to summarize sessions (`claude -p --model` or `codex exec --model`) |
+| `WORK_JOURNAL_MODEL` | `haiku` | model used for the Claude summarizer, and for Kilo/OpenCode only when it is already in `provider/model` form |
 | `WORK_JOURNAL_MAX_BYTES` | `200000` | max transcript bytes fed to the model (positive integer; invalid values fall back to default) |
 | `WORK_JOURNAL_QUIET` | unset | set to `1` to hide the session-start banner |
 | `WORK_JOURNAL_SUMMARIZER` | unset | a stdin-reading command to summarize with (e.g. `codex exec`); overrides the default |
 | `CLAUDE_BIN` | `claude` | path to the Claude CLI if it's not on `PATH` |
+| `WORK_JOURNAL_CODEX_MODEL` | unset | model for the `codex exec` summarizer fallback; if unset, Codex's configured default model is used |
+| `WORK_JOURNAL_KILO_CAPTURE_DELAY_MS` | `30000` | Kilo/OpenCode adapter debounce before capturing an idle turn |
+| `WORK_JOURNAL_KILO_MODEL` | unset | model for the `kilo run --pure` summarizer fallback; if unset, Kilo's configured default model is used |
+| `WORK_JOURNAL_OPENCODE_MODEL` | unset | model for the `opencode run --pure` summarizer fallback; if unset, OpenCode's configured default model is used |
 
-**Requirements:** Bash 3+, `jq`, `git`, standard Unix tools, and a summarizer — `claude` by default, falling back to `codex`, or anything you point `WORK_JOURNAL_SUMMARIZER` at. If `jq` or every summarizer is missing, the hooks simply no-op and log it. `flock` is used when present; otherwise a portable lock-directory fallback is used.
+**Requirements:** Bash 3+, `jq`, `git`, standard Unix tools, and a summarizer — `claude` by default, falling back to `codex`, `kilo run --pure`, `opencode run --pure`, or anything you point `WORK_JOURNAL_SUMMARIZER` at. If `jq` or every summarizer is missing, the hooks simply no-op and log it. `flock` is used when present; otherwise a portable lock-directory fallback is used.
 
 Validate a checkout with:
 
 ```bash
 bash scripts/validate.sh
+bash journal.sh doctor --strict
 ```
 
 ---

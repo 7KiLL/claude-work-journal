@@ -1,6 +1,6 @@
 {
   "name": "work-journal",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "description": "Per-project work journal. Stores local markdown under ~/.claude/work-journal, recalls prior summaries at session start, and uses the configured summarizer to distill finished sessions at Stop.",
   "interface": {
     "displayName": "Work Journal",

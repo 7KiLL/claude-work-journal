@@ -108,6 +108,96 @@ wj_valid_cap() {
   [ "${#n}" -le 9 ] && [ "$n" -gt 0 ]
 }
 
+wj_now_iso() {
+  date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date 2>/dev/null || printf 'unknown-time'
+}
+
+wj_meta_value() {
+  local s
+  s="$(printf '%s' "${1:-}" | LC_ALL=C tr '\r\n\t' '   ' | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177')"
+  printf '%s' "${s:0:240}"
+}
+
+wj_file_fingerprint() {
+  [ -f "$1" ] || return 1
+  cksum "$1" 2>/dev/null | awk '{print $1 ":" $2}'
+}
+
+wj_entry_has_meta() {
+  local file="$1" key="$2" value="$3"
+  [ -f "$file" ] || return 1
+  awk -v want="$key: $value" '
+    BEGIN { found = 0; inside = 0 }
+    NR == 1 {
+      if ($0 == "---") { inside = 1; next }
+      exit
+    }
+    inside && $0 == "---" { exit }
+    inside && $0 == want { found = 1; exit }
+    END { exit(found ? 0 : 1) }
+  ' "$file"
+}
+
+wj_find_entry_by_meta() {
+  local dir="$1" key="$2" value="$3" f bn
+  [ -d "$dir" ] && [ -n "$value" ] || return 1
+  for f in "$dir"/*.md; do
+    [ -e "$f" ] || continue
+    bn="$(basename "$f")"
+    wj_valid_entry_file "$bn" || continue
+    if wj_entry_has_meta "$f" "$key" "$value"; then
+      printf '%s' "$bn"
+      return 0
+    fi
+  done
+  return 1
+}
+
+wj_capture_seen() {
+  local dir="$1" key="$2"
+  [ -d "$dir" ] && [ -n "$key" ] || return 1
+  if [ -f "$dir/.captures" ] && grep -Fxq "$key" "$dir/.captures" 2>/dev/null; then
+    return 0
+  fi
+  wj_find_entry_by_meta "$dir" capture "$key" >/dev/null
+}
+
+wj_capture_mark_locked() {
+  local dir="$1" key="$2" tmp
+  [ -d "$dir" ] && [ -n "$key" ] || return 1
+  if [ -f "$dir/.captures" ] && grep -Fxq "$key" "$dir/.captures" 2>/dev/null; then
+    return 0
+  fi
+  tmp="$(wj_tmp_for "$dir/.captures")" || return 1
+  { [ -f "$dir/.captures" ] && cat "$dir/.captures"; printf '%s\n' "$key"; } > "$tmp" && mv -f "$tmp" "$dir/.captures" || {
+    rm -f "$tmp"
+    return 1
+  }
+}
+
+wj_session_entry_file() {
+  local dir="$1" sid="$2" f
+  [ -d "$dir" ] && [ -n "$sid" ] || return 1
+  if [ -f "$dir/.sessions" ]; then
+    f="$(awk -F '\t' -v s="$sid" '$1 == s { print $2; exit }' "$dir/.sessions" 2>/dev/null || true)"
+    if wj_valid_entry_file "$f" && [ -f "$dir/$f" ]; then
+      printf '%s' "$f"
+      return 0
+    fi
+  fi
+  wj_find_entry_by_meta "$dir" session "$sid"
+}
+
+wj_session_record_locked() {
+  local dir="$1" sid="$2" file="$3" tmp
+  [ -d "$dir" ] && [ -n "$sid" ] && wj_valid_entry_file "$file" || return 1
+  tmp="$(wj_tmp_for "$dir/.sessions")" || return 1
+  { [ -f "$dir/.sessions" ] && awk -F '\t' -v s="$sid" '$1 != s' "$dir/.sessions"; printf '%s\t%s\n' "$sid" "$file"; } > "$tmp" && mv -f "$tmp" "$dir/.sessions" || {
+    rm -f "$tmp"
+    return 1
+  }
+}
+
 wj_tmp_for() {
   local target="$1" dir base
   dir="$(dirname "$target")"; base="$(basename "$target")"
@@ -307,22 +397,56 @@ wj_recall_chain() {
   done
 }
 
+wj_summarize_run_file_cli() {
+  local cli="$1" override_model="$2" model="$3" prompt rc selected_model
+  prompt="$(mktemp "${TMPDIR:-/tmp}/work-journal-prompt.XXXXXX")" || return 1
+  cat > "$prompt"
+  selected_model="$override_model"
+  [ -n "$selected_model" ] || case "$model" in */*) selected_model="$model" ;; esac
+  if [ -n "$selected_model" ]; then
+    WORK_JOURNAL_LOCK=1 "$cli" run --pure --model "$selected_model" --file "$prompt" "Read the attached work-journal prompt and respond exactly as instructed."
+  else
+    WORK_JOURNAL_LOCK=1 "$cli" run --pure --file "$prompt" "Read the attached work-journal prompt and respond exactly as instructed."
+  fi
+  rc=$?
+  rm -f "$prompt"
+  return "$rc"
+}
+
+wj_summarize_codex() {
+  if [ -n "${WORK_JOURNAL_CODEX_MODEL:-}" ]; then
+    WORK_JOURNAL_LOCK=1 codex exec --model "$WORK_JOURNAL_CODEX_MODEL"
+  else
+    WORK_JOURNAL_LOCK=1 codex exec
+  fi
+}
+
 # Summarize: read a prompt on stdin, print the model's reply on stdout. Uses the
 # Claude CLI by default ($CLAUDE_BIN, $WORK_JOURNAL_MODEL). Set
-# WORK_JOURNAL_SUMMARIZER to a stdin-reading command to use Codex or any other
-# model (e.g. `codex exec`) on a box without `claude`. WORK_JOURNAL_LOCK stops
-# the nested call from re-firing our own hooks.
+# WORK_JOURNAL_SUMMARIZER to a stdin-reading command to use any custom model.
+# Fallbacks prefer the active Kilo/OpenCode host when known, then Codex.
+# WORK_JOURNAL_LOCK stops nested calls from re-firing our own hooks.
 wj_summarize() {
-  local claude="${CLAUDE_BIN:-claude}" model="${WORK_JOURNAL_MODEL:-haiku}"
+  local claude="${CLAUDE_BIN:-claude}" model="${WORK_JOURNAL_MODEL:-haiku}" host="${WORK_JOURNAL_HOST:-}"
   if [ -n "${WORK_JOURNAL_SUMMARIZER:-}" ]; then
     WORK_JOURNAL_LOCK=1 bash -c "$WORK_JOURNAL_SUMMARIZER"
   elif command -v "$claude" >/dev/null 2>&1; then
     WORK_JOURNAL_LOCK=1 "$claude" -p --model "$model"
-  else
+  elif [ "$host" = opencode ] && command -v opencode >/dev/null 2>&1; then
+    wj_summarize_run_file_cli opencode "${WORK_JOURNAL_OPENCODE_MODEL:-}" "$model"
+  elif [ "$host" = kilo ] && command -v kilo >/dev/null 2>&1; then
+    wj_summarize_run_file_cli kilo "${WORK_JOURNAL_KILO_MODEL:-}" "$model"
+  elif command -v codex >/dev/null 2>&1; then
     # ponytail: best-effort Codex fallback when claude is absent — lets the Codex
     # plugin work with no config. If your build's `codex exec` doesn't read the
     # prompt on stdin, set WORK_JOURNAL_SUMMARIZER. Failure is logged, never fatal.
-    WORK_JOURNAL_LOCK=1 codex exec --model "$model"
+    wj_summarize_codex
+  elif command -v kilo >/dev/null 2>&1; then
+    wj_summarize_run_file_cli kilo "${WORK_JOURNAL_KILO_MODEL:-}" "$model"
+  elif command -v opencode >/dev/null 2>&1; then
+    wj_summarize_run_file_cli opencode "${WORK_JOURNAL_OPENCODE_MODEL:-}" "$model"
+  else
+    return 1
   fi
 }
 

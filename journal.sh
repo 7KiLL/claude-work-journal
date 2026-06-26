@@ -11,7 +11,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/hooks/lib.
 usage() {
   cat <<'EOF'
 work-journal — manage ~/.claude/work-journal
-  doctor                health check: deps, project count, recent errors
+  doctor [--strict]     health check: deps, permissions, harness files, recent errors
   ls                    list projects and entry counts
   trim <project> [N]    keep newest N entries (default 30); summarize the rest into archive.md
   mv <from> <to>        rename a project's journal, or merge it into an existing one
@@ -41,6 +41,135 @@ oldfile_contains() {
     [ "$f" = "$want" ] && return 0
   done
   return 1
+}
+
+doctor_ok() { printf 'ok      %s\n' "$1"; }
+doctor_warn() { printf 'warn    %s\n' "$1"; }
+doctor_bad() { printf 'not ok  %s\n' "$1"; doctor_fail=1; }
+
+doctor_cmd() {
+  if command -v "$1" >/dev/null 2>&1; then
+    doctor_ok "dep: $1 ($(command -v "$1"))"
+  else
+    doctor_bad "dep missing: $1"
+  fi
+}
+
+doctor_run() {
+  local strict=0 root probe np ne p c f
+  local -a manifest_files
+  [ "${1:-}" = "--strict" ] && strict=1
+  doctor_fail=0
+  root="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+
+  echo "work-journal doctor"
+  echo "journal dir: $MEM"
+  echo "plugin root: $root"
+  echo "bash: ${BASH_VERSION:-unknown}"
+  echo "tmpdir: ${TMPDIR:-/tmp}"
+  echo "path: $PATH"
+
+  if mkdir -p "$MEM" 2>/dev/null; then
+    doctor_ok "journal dir exists or was created"
+    probe="$MEM/.doctor-write-test.$$"
+    if : > "$probe" 2>/dev/null; then
+      rm -f "$probe"
+      doctor_ok "journal dir writable"
+    else
+      doctor_bad "journal dir is not writable"
+    fi
+  else
+    doctor_bad "could not create journal dir"
+  fi
+
+  if command -v flock >/dev/null 2>&1; then
+    doctor_ok "lock backend: flock"
+  else
+    doctor_warn "lock backend: mkdir fallback (flock not found)"
+  fi
+  if wj_with_lock "$MEM" true 2>/dev/null; then
+    doctor_ok "journal lock can be acquired"
+  else
+    doctor_bad "journal lock could not be acquired"
+  fi
+
+  for c in bash jq git awk sed grep head tail mkdir mv rm cksum date; do
+    doctor_cmd "$c"
+  done
+
+  if [ -n "${WORK_JOURNAL_SUMMARIZER:-}" ]; then
+    doctor_ok "summarizer: custom WORK_JOURNAL_SUMMARIZER"
+  elif command -v "$CLI" >/dev/null 2>&1; then
+    doctor_ok "summarizer: $CLI -p --model $MODEL"
+  elif command -v codex >/dev/null 2>&1; then
+    if [ -n "${WORK_JOURNAL_CODEX_MODEL:-}" ]; then
+      doctor_ok "summarizer: codex exec --model $WORK_JOURNAL_CODEX_MODEL"
+    else
+      doctor_ok "summarizer: codex exec (configured Codex default model)"
+    fi
+  elif command -v kilo >/dev/null 2>&1; then
+    if [ -n "${WORK_JOURNAL_KILO_MODEL:-}" ]; then
+      doctor_ok "summarizer: kilo run --pure --model $WORK_JOURNAL_KILO_MODEL"
+    else
+      doctor_ok "summarizer: kilo run --pure (configured Kilo default model)"
+    fi
+  elif command -v opencode >/dev/null 2>&1; then
+    if [ -n "${WORK_JOURNAL_OPENCODE_MODEL:-}" ]; then
+      doctor_ok "summarizer: opencode run --pure --model $WORK_JOURNAL_OPENCODE_MODEL"
+    else
+      doctor_ok "summarizer: opencode run --pure (configured OpenCode default model)"
+    fi
+  else
+    doctor_bad "summarizer missing: install claude/codex/kilo/opencode or set WORK_JOURNAL_SUMMARIZER"
+  fi
+
+  if wj_valid_cap "${WORK_JOURNAL_MAX_BYTES:-200000}"; then
+    doctor_ok "WORK_JOURNAL_MAX_BYTES valid (${WORK_JOURNAL_MAX_BYTES:-200000})"
+  else
+    doctor_bad "WORK_JOURNAL_MAX_BYTES invalid (${WORK_JOURNAL_MAX_BYTES:-unset})"
+  fi
+
+  [ -r "$root/hooks/recall.sh" ] && doctor_ok "recall hook readable" || doctor_bad "recall hook missing/unreadable"
+  [ -r "$root/hooks/capture.sh" ] && doctor_ok "capture hook readable" || doctor_bad "capture hook missing/unreadable"
+  [ -r "$root/hooks/lib.sh" ] && doctor_ok "shared lib readable" || doctor_bad "shared lib missing/unreadable"
+  [ -r "$root/kilo-plugin/work-journal.js" ] && doctor_ok "Kilo/OpenCode adapter present" || doctor_warn "Kilo/OpenCode adapter missing"
+  command -v kilo >/dev/null 2>&1 && doctor_ok "Kilo CLI present" || doctor_warn "Kilo CLI not found"
+  command -v opencode >/dev/null 2>&1 && doctor_ok "OpenCode CLI present" || doctor_warn "OpenCode CLI not found"
+
+  if command -v jq >/dev/null 2>&1; then
+    manifest_files=("$root/.claude-plugin/plugin.json" "$root/.codex-plugin/plugin.json" "$root/hooks/hooks.json" "$root/hooks/hooks.codex.json")
+    if jq -e . "${manifest_files[@]}" >/dev/null 2>&1; then
+      doctor_ok "Claude/Codex manifests parse"
+    else
+      doctor_bad "Claude/Codex manifest JSON parse failed"
+    fi
+  fi
+  if command -v node >/dev/null 2>&1 && [ -r "$root/kilo-plugin/work-journal.js" ]; then
+    if node --check "$root/kilo-plugin/work-journal.js" >/dev/null 2>&1; then
+      doctor_ok "Kilo adapter syntax"
+    else
+      doctor_bad "Kilo adapter syntax failed"
+    fi
+  else
+    doctor_warn "node unavailable; skipped Kilo adapter syntax check"
+  fi
+
+  np=0; ne=0
+  if [ -d "$MEM" ]; then
+    for p in "$MEM"/*/INDEX.md; do
+      [ -e "$p" ] || continue
+      np=$((np+1))
+      c="$(wj_entry_lines "$p" | grep -c '' 2>/dev/null || true)"; ne=$((ne+${c:-0}))
+    done
+  fi
+  echo "projects: $np (${ne} entries total)"
+
+  for f in "$MEM/.errors.log" "$MEM/.errors.log.shown"; do
+    [ -s "$f" ] && { echo "--- $(basename "$f") (last 20) ---"; tail -n 20 "$f"; }
+  done
+
+  [ "$strict" = 1 ] && return "$doctor_fail"
+  return 0
 }
 
 trim_commit() {
@@ -92,7 +221,7 @@ mv_lookup() {
 }
 
 mv_commit() {
-  local header f bn base n newbn src_arch dst_arch arch_tmp entries_tmp idx_tmp l tgt newtgt seen
+  local header f bn base n newbn src_arch dst_arch arch_tmp entries_tmp idx_tmp l tgt newtgt seen cap_tmp sessions_tmp ss sf newsf
   [ -d "$src" ] || { echo "no such project: $from"; return 1; }
   if [ ! -d "$dst" ]; then
     mv "$src" "$dst" || return 1
@@ -123,6 +252,32 @@ mv_commit() {
     arch_tmp="$(wj_tmp_for "$dst_arch")" || return 1
     { [ -f "$dst_arch" ] && cat "$dst_arch"; cat "$src_arch"; } > "$arch_tmp" && mv -f "$arch_tmp" "$dst_arch" || {
       rm -f "$arch_tmp"
+      return 1
+    }
+  fi
+
+  if [ -f "$src/.captures" ]; then
+    cap_tmp="$(wj_tmp_for "$dst/.captures")" || return 1
+    { [ -f "$dst/.captures" ] && cat "$dst/.captures"; cat "$src/.captures"; } \
+      | awk 'NF && !seen[$0]++' > "$cap_tmp" && mv -f "$cap_tmp" "$dst/.captures" || {
+        rm -f "$cap_tmp"
+        return 1
+      }
+  fi
+
+  if [ -f "$src/.sessions" ]; then
+    sessions_tmp="$(wj_tmp_for "$dst/.sessions")" || return 1
+    {
+      [ -f "$dst/.sessions" ] && cat "$dst/.sessions"
+      while IFS="$(printf '\t')" read -r ss sf; do
+        [ -n "$ss" ] || continue
+        wj_valid_entry_file "$sf" || continue
+        newsf="$(mv_lookup "$sf")"
+        [ -f "$dst/$newsf" ] || continue
+        printf '%s\t%s\n' "$ss" "$newsf"
+      done < "$src/.sessions"
+    } | awk -F '\t' '$1 != "" && !seen[$1]++' > "$sessions_tmp" && mv -f "$sessions_tmp" "$dst/.sessions" || {
+      rm -f "$sessions_tmp"
       return 1
     }
   fi
@@ -168,36 +323,7 @@ cmd="${1:-}"; [ $# -gt 0 ] && shift
 
 case "$cmd" in
   doctor)
-    echo "journal dir: $MEM"
-    echo "bash:        ${BASH_VERSION:-unknown}"
-    if command -v flock >/dev/null 2>&1; then
-      echo "lock:        flock"
-    else
-      echo "lock:        mkdir fallback (flock not found)"
-    fi
-    deps="jq git"
-    if [ -n "${WORK_JOURNAL_SUMMARIZER:-}" ]; then
-      echo "summarizer:  $WORK_JOURNAL_SUMMARIZER (custom)"
-    elif command -v "$CLI" >/dev/null 2>&1; then
-      echo "summarizer:  $CLI -p --model $MODEL"; deps="$deps $CLI"
-    elif command -v codex >/dev/null 2>&1; then
-      echo "summarizer:  codex exec (claude not found)"; deps="$deps codex"
-    else
-      echo "summarizer:  NONE — install claude/codex or set WORK_JOURNAL_SUMMARIZER"
-    fi
-    for b in $deps; do
-      if command -v "$b" >/dev/null 2>&1; then echo "  dep ok:      $b"; else echo "  dep MISSING: $b"; fi
-    done
-    np=0; ne=0
-    if [ -d "$MEM" ]; then for d in "$MEM"/*/INDEX.md; do
-      [ -e "$d" ] || continue
-      np=$((np+1))
-      c="$(wj_entry_lines "$d" | grep -c '' 2>/dev/null || true)"; ne=$((ne+${c:-0}))
-    done; fi
-    echo "projects: $np (${ne} entries total)"
-    for f in "$MEM/.errors.log" "$MEM/.errors.log.shown"; do
-      [ -s "$f" ] && { echo "--- $(basename "$f") (last 20) ---"; tail -n 20 "$f"; }
-    done
+    doctor_run "${1:-}"
     ;;
 
   ls)
